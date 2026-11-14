@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 from typing import Any
 
@@ -84,4 +85,46 @@ class DanfossAllyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=_schema(user_input or {}),
             errors=errors,
             description_placeholders=placeholders,
+        )
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        """Start re-authentication after the gateway rejected the key."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for a new local key (e.g. after the gateway was re-paired)."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            data = {**entry.data, **user_input}
+            gateway = DanfossGateway(
+                data[CONF_HOST], data[CONF_DEVICE_ID], data[CONF_LOCAL_KEY], data[CONF_PROTOCOL_VERSION]
+            )
+            try:
+                await self.hass.async_add_executor_job(gateway.list_subdevices)
+            except GatewayAuthError:
+                errors["base"] = "invalid_auth"
+            except GatewayError:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(entry, data=data)
+            finally:
+                await self.hass.async_add_executor_job(gateway.close)
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_LOCAL_KEY): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
+                    vol.Required(
+                        CONF_PROTOCOL_VERSION,
+                        default=entry.data.get(CONF_PROTOCOL_VERSION, DEFAULT_PROTOCOL_VERSION),
+                    ): SelectSelector(SelectSelectorConfig(options=PROTOCOL_VERSIONS)),
+                }
+            ),
+            errors=errors,
         )

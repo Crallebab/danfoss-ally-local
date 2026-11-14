@@ -18,14 +18,9 @@ class DanfossLocalEntity(CoordinatorEntity[DanfossLocalCoordinator]):
         super().__init__(coordinator)
         self._cid = cid
         self._attr_unique_id = f"{cid}_{key}"
-        dev = self.device
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, cid)},
-            name=f"Danfoss {dev.profile.name.lower()} {cid[-4:]}",
-            manufacturer="Danfoss",
-            model=dev.profile.name,
-            via_device=(DOMAIN, coordinator.gateway_id),
-        )
+        # The device itself (name, model, link to the gateway) is registered in
+        # __init__.async_setup_entry; entities only point at it.
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, cid)})
 
     @property
     def device(self) -> SubDevice:

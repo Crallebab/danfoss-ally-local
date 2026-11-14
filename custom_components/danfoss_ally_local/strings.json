@@ -10,6 +10,14 @@
           "local_key": "Local key",
           "protocol_version": "Protocol version"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-enter the gateway's local key",
+        "description": "The gateway rejected the local key. This happens if the gateway was reset or re-paired.",
+        "data": {
+          "local_key": "Local key",
+          "protocol_version": "Protocol version"
+        }
       }
     },
     "error": {
@@ -18,7 +26,8 @@
       "no_subdevices": "Connected, but the gateway reported no sub-devices."
     },
     "abort": {
-      "already_configured": "This gateway is already configured."
+      "already_configured": "This gateway is already configured.",
+      "reauth_successful": "The new key works. Reloading."
     }
   },
   "entity": {

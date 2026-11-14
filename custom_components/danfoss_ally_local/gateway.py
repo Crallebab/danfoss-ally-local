@@ -19,8 +19,10 @@ from .const import FORBIDDEN_WRITE_DPS
 
 _LOGGER = logging.getLogger(__name__)
 
-# tinytuya error codes that mean the key or protocol version is wrong.
-_AUTH_ERRORS = {"914", "904"}
+# tinytuya error code that means the key or protocol version is wrong.
+# 904 ("Unexpected Payload") is NOT an auth error: sub-devices occasionally
+# produce it (e.g. a late reply to an earlier request); it is retried instead.
+_AUTH_ERRORS = {"914"}
 _RETRY_DELAY = 2.0
 
 
