@@ -37,7 +37,8 @@ def test_encode_refuses_read_only_and_unmapped():
     with pytest.raises(KeyError):
         profiles.RADIATOR_THERMOSTAT.encode("temp_current", 20)
     with pytest.raises(KeyError):
-        profiles.RADIATOR_THERMOSTAT.encode("window_toggle", True)
+        profiles.RADIATOR_THERMOSTAT.encode("radiator_covered", True)
+    assert profiles.RADIATOR_THERMOSTAT.encode("window_toggle", False) == ("116", False)
 
 
 def test_detect_profile():
