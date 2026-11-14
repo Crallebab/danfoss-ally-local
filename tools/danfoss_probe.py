@@ -67,6 +67,8 @@ def _load_gateway_class() -> type:
 
 
 def cmd_local(args: argparse.Namespace) -> None:
+    if not args.key:
+        sys.exit("Set DANFOSS_LOCAL_KEY or pass --key")
     DanfossGateway = _load_gateway_class()  # noqa: N806
 
     gw = DanfossGateway(args.host, args.gw_id, args.key, args.version)
@@ -138,6 +140,9 @@ def _distinctive(value: Any) -> bool:
 
 
 def cmd_map(_: argparse.Namespace) -> None:
+    for name in ("local.json", "cloud.json"):
+        if not (SNAPSHOTS / name).exists():
+            sys.exit(f"snapshots/{name} is missing; run the 'local' and 'cloud' commands first")
     local = json.loads((SNAPSHOTS / "local.json").read_text(encoding="utf-8"))
     cloud = json.loads((SNAPSHOTS / "cloud.json").read_text(encoding="utf-8"))
     local = {cid: v["dps"] for cid, v in local.items() if "dps" in v}
@@ -233,7 +238,8 @@ def main() -> None:
     p = sub.add_parser("local")
     p.add_argument("--host", required=True)
     p.add_argument("--gw-id", required=True)
-    p.add_argument("--key", required=True)
+    p.add_argument("--key", default=os.environ.get("DANFOSS_LOCAL_KEY"),
+                   help="local key; prefer the DANFOSS_LOCAL_KEY env var (keeps it out of shell history)")
     p.add_argument("--version", default="3.5")
     p.set_defaults(func=cmd_local)
     sub.add_parser("cloud").set_defaults(func=cmd_cloud)

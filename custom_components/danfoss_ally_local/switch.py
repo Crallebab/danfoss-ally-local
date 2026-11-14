@@ -37,6 +37,9 @@ SWITCHES = (
 )
 
 
+PARALLEL_UPDATES = 1
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: DanfossLocalConfigEntry,

@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
 import pytest
 
-_PATH = Path(__file__).resolve().parent.parent / "custom_components" / "danfoss_ally_local" / "profiles.py"
-_spec = importlib.util.spec_from_file_location("profiles", _PATH)
-profiles = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(profiles)
+from conftest import load
+
+profiles = load("profiles")
 
 
 def test_decode_scales_tenths():
@@ -41,12 +37,35 @@ def test_encode_refuses_read_only_and_unmapped():
     assert profiles.RADIATOR_THERMOSTAT.encode("window_toggle", False) == ("116", False)
 
 
+VALVE = {"2": "manual", "16": 200, "24": 190, "114": 200, "169": 1900}
+
+
 def test_detect_profile():
-    assert profiles.detect_profile({"1": True, "2": "manual", "16": 200, "24": 190}) is profiles.RADIATOR_THERMOSTAT
+    assert profiles.detect_profile(VALVE) is profiles.RADIATOR_THERMOSTAT
     assert profiles.detect_profile({"1": 212, "2": 521, "4": 41}) is profiles.ROOM_SENSOR
     assert profiles.ROOM_SENSOR.value({"1": 218, "2": 517, "4": 41}, "humidity_value") == 51.7
     assert profiles.detect_profile({"1": 212, "2": 521, "3": 41}) is profiles.UNKNOWN
     assert profiles.detect_profile({}) is profiles.UNKNOWN
+
+
+def test_detect_needs_an_ally_only_dp():
+    # DPs 2/16/24 alone also fit other Danfoss/Tuya thermostats (Icon RT).
+    shared = {"2": "manual", "16": 200, "24": 190}
+    assert profiles.detect_profile(shared) is profiles.UNKNOWN
+
+
+def test_partial_valve_status_is_not_a_room_sensor():
+    assert profiles.detect_profile({"1": True, "2": "manual", "4": 0}) is profiles.UNKNOWN
+
+
+def test_detect_checks_value_types():
+    assert profiles.detect_profile({**VALVE, "16": "200"}) is profiles.UNKNOWN
+    assert profiles.detect_profile({**VALVE, "2": 3}) is profiles.UNKNOWN
+
+
+def test_raw_ignores_writable_flag_but_not_mapping():
+    assert profiles.RADIATOR_THERMOSTAT.raw("temp_set", 20.5) == ("16", 205)
+    assert profiles.RADIATOR_THERMOSTAT.raw("radiator_covered", True) is None
 
 
 def test_factory_reset_never_writable():

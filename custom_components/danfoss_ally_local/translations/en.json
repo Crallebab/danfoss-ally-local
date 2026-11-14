@@ -3,12 +3,18 @@
     "step": {
       "user": {
         "title": "Danfoss Ally Gateway (local)",
-        "description": "Connect to the gateway over your LAN using the Tuya protocol. The device ID and protocol version can be found with `tools/danfoss_probe.py scan`.",
+        "description": "Connect to the gateway over your local network using the Tuya LAN protocol. See the README for how to find the device ID and the local key of your own gateway.",
         "data": {
           "host": "Host",
           "device_id": "Gateway device ID",
           "local_key": "Local key",
           "protocol_version": "Protocol version"
+        },
+        "data_description": {
+          "host": "IP address of the Danfoss Ally Gateway. Give it a fixed address in your router.",
+          "device_id": "The gateway's Tuya device ID (22 characters).",
+          "local_key": "The gateway's Tuya local key (16 characters). It changes if the gateway is reset or paired again.",
+          "protocol_version": "Tuya LAN protocol version. Ally gateways use 3.5."
         }
       },
       "reauth_confirm": {
@@ -17,6 +23,10 @@
         "data": {
           "local_key": "Local key",
           "protocol_version": "Protocol version"
+        },
+        "data_description": {
+          "local_key": "The gateway's Tuya local key (16 characters). It changes if the gateway is reset or paired again.",
+          "protocol_version": "Tuya LAN protocol version. Ally gateways use 3.5."
         }
       }
     },
@@ -47,23 +57,42 @@
       }
     },
     "sensor": {
-      "heating_demand": { "name": "Heating demand" },
-      "raw_dps": { "name": "Raw data points" }
+      "heating_demand": {
+        "name": "Heating demand"
+      },
+      "raw_dps": {
+        "name": "Raw data points"
+      }
     },
     "switch": {
-      "preheat": { "name": "Pre-heating" },
-      "child_lock": { "name": "Child lock" },
-      "window_detection": { "name": "Open window detection" }
+      "preheat": {
+        "name": "Pre-heating"
+      },
+      "child_lock": {
+        "name": "Child lock"
+      },
+      "window_detection": {
+        "name": "Open window detection"
+      }
     },
     "number": {
-      "at_home_temperature": { "name": "At home temperature" },
-      "away_temperature": { "name": "Away temperature" },
-      "pause_temperature": { "name": "Pause temperature" }
+      "at_home_temperature": {
+        "name": "At home temperature"
+      },
+      "away_temperature": {
+        "name": "Away temperature"
+      },
+      "pause_temperature": {
+        "name": "Pause temperature"
+      }
     },
     "select": {
       "mounting": {
         "name": "Mounting",
-        "state": { "horizontal": "Horizontal", "vertical": "Vertical" }
+        "state": {
+          "horizontal": "Horizontal",
+          "vertical": "Vertical"
+        }
       }
     }
   },
@@ -71,7 +100,7 @@
     "step": {
       "init": {
         "title": "Device names",
-        "description": "The gateway's local protocol carries no names, so name each device here. Fields are keyed by Zigbee node id."
+        "description": "The gateway's local protocol carries no names, so name each device here. Fields are labelled with the device's Zigbee node id; clear a field to go back to the default name."
       }
     }
   }

@@ -8,3 +8,5 @@ __pycache__/
 secrets.json
 *.local.json
 snapshots/
+names.json
+.ha_token

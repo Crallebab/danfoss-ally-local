@@ -19,10 +19,14 @@ from .entity import DanfossLocalEntity
 from .profiles import RADIATOR_THERMOSTAT
 
 # Danfoss modes, exposed one-to-one as presets.
-PRESETS = ["at_home", "leaving_home", "manual", "holiday", "pause"]
+# "holiday" is reported by the device but not offered: its setpoint DP is unmapped.
+PRESETS = ["at_home", "leaving_home", "manual", "pause"]
 SCHEDULE_MODES = {"at_home", "leaving_home"}
 # The external room-sensor temperature reports -80 °C when no sensor is linked.
 NO_EXTERNAL_SENSOR = -80.0
+
+
+PARALLEL_UPDATES = 1
 
 
 async def async_setup_entry(
@@ -73,15 +77,18 @@ class DanfossLocalClimate(DanfossLocalEntity, ClimateEntity):
         """Return the active setpoint."""
         return self.device.value("temp_set")
 
+    # min_temp / max_temp have no native_ variant in Home Assistant.
     @property
-    def native_min_temp(self) -> float:
+    def min_temp(self) -> float:
         """Return the lowest allowed setpoint."""
-        return self.device.value("lower_temp") or 5.0
+        value = self.device.value("lower_temp")
+        return 5.0 if value is None else value
 
     @property
-    def native_max_temp(self) -> float:
+    def max_temp(self) -> float:
         """Return the highest allowed setpoint."""
-        return self.device.value("upper_temp") or 35.0
+        value = self.device.value("upper_temp")
+        return 35.0 if value is None else value
 
     @property
     def preset_mode(self) -> str | None:
@@ -106,8 +113,11 @@ class DanfossLocalClimate(DanfossLocalEntity, ClimateEntity):
         """Return whether the valve is currently heating."""
         if self.device.value("mode") == "pause":
             return HVACAction.OFF
-        state = str(self.device.value("work_state") or "").lower()
-        if not state or state == "noheat":
+        work_state = self.device.value("work_state")
+        if work_state is None:
+            return None
+        state = str(work_state).lower()
+        if state == "noheat":
             return HVACAction.IDLE
         if not state.startswith("heat"):
             return None
@@ -132,9 +142,12 @@ class DanfossLocalClimate(DanfossLocalEntity, ClimateEntity):
         """Set a manual setpoint (overrides the schedule, like the Danfoss app)."""
         if ATTR_TEMPERATURE not in kwargs:
             return
+        temperature = float(kwargs[ATTR_TEMPERATURE])
         await self.coordinator.async_write(
             self._cid,
-            {"mode": "manual", "manual_mode_fast": float(kwargs[ATTR_TEMPERATURE])},
+            {"mode": "manual", "manual_mode_fast": temperature},
+            # In manual mode the active setpoint follows the manual setpoint.
+            optimistic={"temp_set": temperature},
         )
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
@@ -143,6 +156,8 @@ class DanfossLocalClimate(DanfossLocalEntity, ClimateEntity):
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Map an HVAC mode to a Danfoss mode."""
+        if hvac_mode == HVACMode.AUTO and self.device.value("mode") in SCHEDULE_MODES:
+            return  # already on the schedule; don't override "away" with "at home"
         mode = {HVACMode.AUTO: "at_home", HVACMode.HEAT: "manual", HVACMode.OFF: "pause"}[
             hvac_mode
         ]

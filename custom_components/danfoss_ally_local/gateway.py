@@ -19,9 +19,11 @@ from .const import FORBIDDEN_WRITE_DPS
 
 _LOGGER = logging.getLogger(__name__)
 
-# tinytuya error code that means the key or protocol version is wrong.
-# 904 ("Unexpected Payload") is NOT an auth error: sub-devices occasionally
-# produce it (e.g. a late reply to an earlier request); it is retried instead.
+# tinytuya error code for "check device key or version". It is also returned when
+# the gateway simply does not answer the session-key negotiation on a fresh
+# socket (busy connection slot), so it is retried once like any other error and
+# callers must not treat a single occurrence as proof of a wrong key.
+# 904 ("Unexpected Payload") is a plain transient error.
 _AUTH_ERRORS = {"914"}
 _RETRY_DELAY = 2.0
 
@@ -31,7 +33,7 @@ class GatewayError(Exception):
 
 
 class GatewayAuthError(GatewayError):
-    """The local key or protocol version is wrong."""
+    """The gateway rejected the session twice in a row: probably a wrong key."""
 
 
 def _check(result: Any, what: str) -> dict[str, Any]:
@@ -51,18 +53,35 @@ def _check(result: Any, what: str) -> dict[str, Any]:
 class DanfossGateway:
     """Connection to one gateway and its Zigbee sub-devices."""
 
-    def __init__(self, host: str, device_id: str, local_key: str, version: str) -> None:
+    def __init__(
+        self,
+        host: str,
+        device_id: str,
+        local_key: str,
+        version: str,
+        *,
+        device_factory: Callable[..., Any] | None = None,
+        retry_delay: float = _RETRY_DELAY,
+    ) -> None:
         self._host = host
         self._device_id = device_id
         self._local_key = local_key
         self._version = float(version)
+        self._factory = device_factory or tinytuya.Device
+        self._retry_delay = retry_delay
         self._lock = threading.Lock()
-        self._gw: tinytuya.Device | None = None
-        self._children: dict[str, tinytuya.Device] = {}
+        self._gw: Any = None
+        self._children: dict[str, Any] = {}
+        self._closed = False
 
-    def _gateway(self) -> tinytuya.Device:
+    @property
+    def closed(self) -> bool:
+        """Return whether close() was called; a closed gateway never reconnects."""
+        return self._closed
+
+    def _gateway(self) -> Any:
         if self._gw is None:
-            gw = tinytuya.Device(
+            gw = self._factory(
                 self._device_id,
                 self._host,
                 self._local_key,
@@ -76,12 +95,12 @@ class DanfossGateway:
             self._children = {}
         return self._gw
 
-    def _child(self, cid: str) -> tinytuya.Device:
+    def _child(self, cid: str) -> Any:
         child = self._children.get(cid)
         if child is None:
             # The sub-device id is only used locally to route replies; the gateway
             # addresses sub-devices by cid (Zigbee node id).
-            child = tinytuya.Device(cid, cid=cid, parent=self._gateway())
+            child = self._factory(cid, cid=cid, parent=self._gateway())
             self._children[cid] = child
         return child
 
@@ -95,24 +114,24 @@ class DanfossGateway:
         self._children = {}
 
     def _call(self, what: str, func: Callable[[], Any]) -> dict[str, Any]:
-        """Run one request; on a transient failure reconnect and retry once.
+        """Run one request; on any failure reconnect and retry once.
 
         The gateway sometimes ignores the first request on a fresh socket shortly
-        after another connection closed (seen right after the config flow test).
+        after another connection closed, which surfaces as "no response", 904 or
+        914. Only a failure on both attempts is reported to the caller.
         """
         with self._lock:
             for attempt in (1, 2):
+                if self._closed:
+                    raise GatewayError(f"{what}: connection is closed")
                 try:
                     return _check(func(), what)
-                except GatewayAuthError:
-                    self._reset()
-                    raise
                 except GatewayError as err:
                     self._reset()
                     if attempt == 2:
                         raise
                     _LOGGER.debug("%s failed (%s); reconnecting and retrying", what, err)
-                    time.sleep(_RETRY_DELAY)
+                    time.sleep(self._retry_delay)
         raise AssertionError("unreachable")
 
     def list_subdevices(self) -> dict[str, bool]:
@@ -138,13 +157,16 @@ class DanfossGateway:
 
     def set_dps(self, cid: str, values: dict[str, Any]) -> None:
         """Write raw DPs to one sub-device."""
-        bad = FORBIDDEN_WRITE_DPS.intersection(values)
+        # Normalise keys first so an int 44 cannot slip past the guard.
+        raw = {str(dp): value for dp, value in values.items()}
+        bad = FORBIDDEN_WRITE_DPS.intersection(raw)
         if bad:
             raise GatewayError(f"refusing to write forbidden DP(s) {sorted(bad)}")
-        # Setting DPs is idempotent, so a retry after a lost reply is safe.
-        self._call(f"set {cid}", lambda: self._child(cid).set_multiple_values(values))
+        # DP values are absolute, so a retry after a lost reply is safe.
+        self._call(f"set {cid}", lambda: self._child(cid).set_multiple_values(raw))
 
     def close(self) -> None:
-        """Close the socket."""
+        """Close the socket for good; later calls fail instead of reconnecting."""
         with self._lock:
+            self._closed = True
             self._reset()

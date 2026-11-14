@@ -5,7 +5,7 @@ data point it lands in. Read-only: it never talks to the gateway itself.
 
     python tools/watch_dps.py https://ha.example.com [--token-file ~/.ha_token] [--names names.json]
 
-names.json (optional, git-ignored): {"<last 4 of cid>": "Room name", ...}
+names.json (optional; keep it in snapshots/, which is git-ignored): {"<last 4 of cid>": "Room name", ...}
 """
 
 from __future__ import annotations
@@ -39,6 +39,8 @@ def main() -> None:
     p.add_argument("--names")
     p.add_argument("--interval", type=float, default=5)
     a = p.parse_args()
+    if not a.base.startswith("https://"):
+        sys.exit("Refusing to send the access token over plain http; use an https:// URL")
     token = Path(a.token_file).read_text(encoding="utf-8").strip()
     names = json.loads(Path(a.names).read_text(encoding="utf-8")) if a.names else {}
 

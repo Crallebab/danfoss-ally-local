@@ -8,7 +8,12 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import CONF_HOST
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
@@ -39,7 +44,8 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
         {
             vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, "")): str,
             vol.Required(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
-            vol.Required(CONF_LOCAL_KEY, default=defaults.get(CONF_LOCAL_KEY, "")): TextSelector(
+            # Never pre-filled: a failed attempt must not echo the key back.
+            vol.Required(CONF_LOCAL_KEY): TextSelector(
                 TextSelectorConfig(type=TextSelectorType.PASSWORD)
             ),
             vol.Required(
@@ -50,8 +56,11 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
     )
 
 
-class DanfossAllyLocalOptionsFlow(OptionsFlow):
-    """Name the sub-devices (the gateway's local protocol carries no names)."""
+class DanfossAllyLocalOptionsFlow(OptionsFlowWithReload):
+    """Name the sub-devices (the gateway's local protocol carries no names).
+
+    Saving reloads the entry, which applies the names to the device registry.
+    """
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show one name field per sub-device, keyed by its Zigbee node id."""
@@ -59,11 +68,23 @@ class DanfossAllyLocalOptionsFlow(OptionsFlow):
         devices = entry.runtime_data.devices if hasattr(entry, "runtime_data") else {}
         names: dict[str, str] = dict(entry.options.get(CONF_NAMES, {}))
         if user_input is not None:
-            names.update({cid: name.strip() for cid, name in user_input.items() if name.strip()})
+            for cid, dev in devices.items():
+                name = (user_input.get(cid) or "").strip()
+                # An empty field, or the untouched default, means "no custom name",
+                # so the default can follow the device type later.
+                if name and name != default_name(cid, dev.profile.name):
+                    names[cid] = name
+                else:
+                    names.pop(cid, None)
             return self.async_create_entry(data={**entry.options, CONF_NAMES: names})
 
         schema = {
-            vol.Optional(cid, default=names.get(cid) or default_name(cid, dev.profile.name)): str
+            vol.Optional(
+                cid,
+                description={
+                    "suggested_value": names.get(cid) or default_name(cid, dev.profile.name)
+                },
+            ): str
             for cid, dev in sorted(devices.items(), key=lambda kv: (kv[1].profile.key, kv[0]))
         }
         return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))

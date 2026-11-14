@@ -10,11 +10,13 @@ CONF_DEVICE_ID = "device_id"
 CONF_LOCAL_KEY = "local_key"
 CONF_PROTOCOL_VERSION = "protocol_version"
 CONF_NAMES = "names"  # options: {cid: device name}
+CONF_PROFILES = "profiles"  # data: {cid: profile key}, remembered across restarts
 
 
 def default_name(cid: str, profile_name: str) -> str:
     """Name used until the user sets one (the gateway knows no names)."""
     return f"Danfoss {profile_name.lower()} {cid[-4:]}"
+
 
 DEFAULT_PROTOCOL_VERSION = "3.5"
 PROTOCOL_VERSIONS = ["3.5", "3.4", "3.3"]

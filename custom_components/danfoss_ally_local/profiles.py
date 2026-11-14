@@ -72,6 +72,16 @@ class Profile:
             raise KeyError(f"{self.key}: code {code!r} is read-only")
         return point.dp, point.encode(value)
 
+    def raw(self, code: str, value: Any) -> tuple[str, Any] | None:
+        """Return ``(dp, raw_value)`` for a mapped code, writable or not.
+
+        Used for optimistic state only, never for writing.
+        """
+        point = self.codes.get(code)
+        if point is None or point.dp is None:
+            return None
+        return point.dp, point.encode(value)
+
 
 RADIATOR_THERMOSTAT = Profile(
     key="radiator_thermostat",
@@ -138,16 +148,39 @@ ROOM_SENSOR = Profile(
 UNKNOWN = Profile(key="unknown", name="Unknown device", detect=frozenset())
 
 PROFILES = (RADIATOR_THERMOSTAT, ROOM_SENSOR)
+PROFILES_BY_KEY = {profile.key: profile for profile in (*PROFILES, UNKNOWN)}
 
 # A room sensor reports three DPs; leave a little slack for transport DPs.
 _ROOM_SENSOR_MAX_DPS = 6
+# DPs only the Ally radiator thermostat reports (manual setpoint, 0.01 C
+# temperature, occupied setpoint). DPs 2/16/24 alone also fit the Icon RT schema.
+_RADIATOR_ONLY_DPS = frozenset({"114", "169", "171"})
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def detect_profile(dps: dict[str, Any]) -> Profile:
-    """Pick a profile for a sub-device from its raw DP dict."""
+    """Pick a profile for a sub-device from its raw DP dict.
+
+    Checks value types as well as DP numbers: a partial status from a valve
+    ({1: bool, 2: "manual", ...}) must not look like a room sensor, and another
+    Tuya thermostat that happens to share DPs 2/16/24 must not get writes enabled.
+    """
     keys = set(dps)
-    if RADIATOR_THERMOSTAT.detect <= keys:
+    if (
+        RADIATOR_THERMOSTAT.detect <= keys
+        and isinstance(dps["2"], str)
+        and _is_int(dps["16"])
+        and _is_int(dps["24"])
+        and keys & _RADIATOR_ONLY_DPS
+    ):
         return RADIATOR_THERMOSTAT
-    if ROOM_SENSOR.detect <= keys and len(keys) <= _ROOM_SENSOR_MAX_DPS:
+    if (
+        ROOM_SENSOR.detect <= keys
+        and len(keys) <= _ROOM_SENSOR_MAX_DPS
+        and all(_is_int(dps[dp]) for dp in ROOM_SENSOR.detect)
+    ):
         return ROOM_SENSOR
     return UNKNOWN

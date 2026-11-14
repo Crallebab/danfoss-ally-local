@@ -72,6 +72,9 @@ SENSORS_BY_PROFILE = {
 }
 
 
+PARALLEL_UPDATES = 0
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: DanfossLocalConfigEntry,
@@ -112,6 +115,8 @@ class DanfossRawSensor(DanfossLocalEntity, SensorEntity):
 
     _attr_translation_key = "raw_dps"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    # Every DP lands in the state attributes on each poll; opt-in for debugging.
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: DanfossLocalCoordinator, cid: str) -> None:
         super().__init__(coordinator, cid, "raw_dps")

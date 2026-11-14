@@ -14,6 +14,9 @@ from .entity import DanfossLocalEntity, mapped
 MOUNTING = {"Horizontal": "horizontal", "Vertical": "vertical"}
 
 
+PARALLEL_UPDATES = 1
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: DanfossLocalConfigEntry,

@@ -24,6 +24,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DanfossLocalConfigEntry)
     coordinator = DanfossLocalCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
+    coordinator.async_persist_profiles()
 
     # Register the gateway, then every sub-device linked to it by device id.
     # Entities only reference their device by identifier (see entity.py).
@@ -47,17 +48,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: DanfossLocalConfigEntry)
             serial_number=cid,
             via_device_id=gateway.id,
         )
-        if device.name != name:
-            registry.async_update_device(device.id, name=name)
+        if device.name != name or device.model != dev.profile.name:
+            registry.async_update_device(device.id, name=name, model=dev.profile.name)
 
-    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # From here on a device that turns out to be a different type, or a newly
+    # paired device, reloads the entry so its entities get created.
+    coordinator.reload_on_change = True
     return True
-
-
-async def _async_options_updated(hass: HomeAssistant, entry: DanfossLocalConfigEntry) -> None:
-    """Reload so renamed devices take effect."""
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: DanfossLocalConfigEntry) -> bool:
@@ -66,3 +64,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: DanfossLocalConfigEntry
     if unloaded:
         await entry.runtime_data.async_shutdown()
     return unloaded
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: DanfossLocalConfigEntry, device: dr.DeviceEntry
+) -> bool:
+    """Allow deleting a sub-device the gateway no longer lists (unpaired)."""
+    coordinator = entry.runtime_data
+    ids = {identifier[1] for identifier in device.identifiers if identifier[0] == DOMAIN}
+    return coordinator.gateway_id not in ids and not ids & coordinator.listed
