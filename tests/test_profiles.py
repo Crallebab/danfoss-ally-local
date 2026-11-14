@@ -42,7 +42,9 @@ def test_encode_refuses_read_only_and_unmapped():
 
 def test_detect_profile():
     assert profiles.detect_profile({"1": True, "2": "manual", "16": 200, "24": 190}) is profiles.RADIATOR_THERMOSTAT
-    assert profiles.detect_profile({"1": 212, "2": 521, "3": 41}) is profiles.ROOM_SENSOR
+    assert profiles.detect_profile({"1": 212, "2": 521, "4": 41}) is profiles.ROOM_SENSOR
+    assert profiles.ROOM_SENSOR.value({"1": 218, "2": 517, "4": 41}, "humidity_value") == 51.7
+    assert profiles.detect_profile({"1": 212, "2": 521, "3": 41}) is profiles.UNKNOWN
     assert profiles.detect_profile({}) is profiles.UNKNOWN
 
 

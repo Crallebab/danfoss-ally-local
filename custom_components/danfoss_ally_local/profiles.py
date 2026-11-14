@@ -73,55 +73,57 @@ class Profile:
         return point.dp, point.encode(value)
 
 
-# Numbers come from the Danfoss Icon RT schema (same Danfoss/Tuya code names),
-# published at github.com/Virki-Workspace/danfoss-ally-is-tuya. They are a
-# strong hint for the Ally radiator thermostat, not proof.
 RADIATOR_THERMOSTAT = Profile(
     key="radiator_thermostat",
     name="Radiator thermostat",
     detect=frozenset({"2", "16", "24"}),
     confirmed=False,
+    # Mapped 2026-11-14 on 5 Ally radiator thermostats (Tuya product den6kzk0) by
+    # comparing local DPs with the Danfoss cloud snapshot (tools/danfoss_probe.py map).
+    # "5/5" = value matched on every valve; "1/1" = only one valve reported the DP.
     codes={
-        "switch": DataPoint("1", writable=True),
-        "mode": DataPoint("2", writable=True),
-        "work_state": DataPoint("3"),
-        "temp_set": DataPoint("16", 10, writable=True),
-        "upper_temp": DataPoint("18", 10),
-        "temp_current": DataPoint("24", 10),
-        "lower_temp": DataPoint("27", 10),
-        "child_lock": DataPoint("30", writable=True),
-        "battery_percentage": DataPoint("34"),
-        "fault": DataPoint("45"),
-        "SetpointChangeSource": DataPoint("111"),
-        "manual_mode_fast": DataPoint("114", 10, writable=True),
-        "at_home_setting": DataPoint("118", 10, writable=True),
-        "leaving_home_setting": DataPoint("119", 10, writable=True),
-        "pause_setting": DataPoint("120", 10, writable=True),
-        "holiday_setting": DataPoint("121", 10, writable=True),
-        "switch_state": DataPoint("123"),
-        # Radiator-only codes: numbers unknown until mapped.
-        "window_state": DataPoint(None),
+        "mode": DataPoint("2", writable=True),  # 5/5
+        "work_state": DataPoint("3"),  # 5/5
+        "temp_set": DataPoint("16", 10),  # 5/5, active setpoint
+        "upper_temp": DataPoint("18", 10),  # 1/1, matches Icon RT schema
+        "temp_current": DataPoint("24", 10),  # 5/5
+        "lower_temp": DataPoint("27", 10),  # 1/1, matches Icon RT schema
+        "battery_percentage": DataPoint("34"),  # 5/5
+        "SetpointChangeSource": DataPoint("111"),  # 5/5
+        "manual_mode_fast": DataPoint("114", 10, writable=True),  # 5/5
+        "ext_measured_rs": DataPoint("158", 100),  # 3/3, -80.00 = no room sensor
+        "OccupiedSetpoint": DataPoint("171", 100),  # 5/5
+        # Unresolved: values coincide (all True / all 1) or never reported locally.
+        # Candidates noted for the next mapping round.
+        "switch": DataPoint(None),
+        "child_lock": DataPoint(None),  # 30 / 116 / 161 / 163
+        "window_state": DataPoint(None),  # 25 / 117
         "window_toggle": DataPoint(None),
-        "window_state_info": DataPoint(None),
+        "window_state_info": DataPoint(None),  # 25 / 117
+        "pi_heating_demand": DataPoint(None),  # 170 / 173
+        "radiator_covered": DataPoint(None),  # 140 / 159
+        "at_home_setting": DataPoint(None, 10),  # 113 / 118
+        "leaving_home_setting": DataPoint(None, 10),  # 109 / 112 / 119
+        "pause_setting": DataPoint(None, 10),
+        "holiday_setting": DataPoint(None, 10),  # 115?
+        "fault": DataPoint(None),
+        "switch_state": DataPoint(None),
         "mounting_mode_active": DataPoint(None),
-        "ext_measured_rs": DataPoint(None, 100),
-        "radiator_covered": DataPoint(None),
         "heat_available": DataPoint(None),
         "load_balance_enable": DataPoint(None),
-        "pi_heating_demand": DataPoint(None),
-        "OccupiedSetpoint": DataPoint(None, 100),
     },
 )
 
 ROOM_SENSOR = Profile(
     key="room_sensor",
     name="Room sensor",
-    detect=frozenset(),  # matched by size, see detect_profile()
-    confirmed=False,
+    detect=frozenset({"1", "2", "4"}),
+    # Read-only device; 2/2 sensors (Tuya product mxzo5rhf) matched.
+    confirmed=True,
     codes={
-        "temp_current": DataPoint(None, 10),
-        "humidity_value": DataPoint(None, 10),
-        "battery_percentage": DataPoint(None),
+        "temp_current": DataPoint("1", 10),
+        "humidity_value": DataPoint("2", 10),
+        "battery_percentage": DataPoint("4"),
     },
 )
 
@@ -138,6 +140,6 @@ def detect_profile(dps: dict[str, Any]) -> Profile:
     keys = set(dps)
     if RADIATOR_THERMOSTAT.detect <= keys:
         return RADIATOR_THERMOSTAT
-    if 0 < len(keys) <= _ROOM_SENSOR_MAX_DPS:
+    if ROOM_SENSOR.detect <= keys and len(keys) <= _ROOM_SENSOR_MAX_DPS:
         return ROOM_SENSOR
     return UNKNOWN

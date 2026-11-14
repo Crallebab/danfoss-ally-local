@@ -162,14 +162,34 @@ def cmd_map(_: argparse.Namespace) -> None:
         idx = pairs.get(cid)
         print(f"  {cid} -> {cloud[idx]['name'] + ' [' + cloud[idx]['type'] + ']' if idx is not None else 'UNMATCHED'}")
 
-    # 2. Per device type, intersect candidate DPs for every code across all pairs.
-    by_type: dict[str, dict[str, set[str] | None]] = {}
+    # 2. Per device type and code, score every DP number. The gateway only returns
+    #    the DPs it has cached for each sub-device, so a DP missing on one device is
+    #    not evidence against it; a DP present with a different value is.
+    #    A candidate is kept if it was never contradicted, ranked by how many
+    #    devices confirm it.
+    def same(a: Any, b: Any) -> bool:
+        return type(a) is type(b) and a == b  # True must not equal 1
+
+    present: dict[str, dict[str, int]] = {}  # dtype -> dp -> devices reporting it
+    match: dict[str, dict[str, dict[str, int]]] = {}  # dtype -> code -> dp -> matches
     for cid, idx in pairs.items():
         cdev, dps = cloud[idx], local[cid]
-        codes = by_type.setdefault(cdev["type"], {})
+        dtype = cdev["type"]
+        for dp in dps:
+            present.setdefault(dtype, {})[dp] = present.get(dtype, {}).get(dp, 0) + 1
+        codes = match.setdefault(dtype, {})
         for code, value in cdev["status"].items():
-            cands = {dp for dp, v in dps.items() if v == value}
-            codes[code] = cands if codes.get(code) is None else codes[code] & cands
+            hits = codes.setdefault(code, {})
+            for dp, v in dps.items():
+                if same(v, value):
+                    hits[dp] = hits.get(dp, 0) + 1
+
+    by_type: dict[str, dict[str, dict[str, int]]] = {}
+    for dtype, codes in match.items():
+        by_type[dtype] = {
+            code: {dp: n for dp, n in hits.items() if n == present[dtype][dp]}
+            for code, hits in codes.items()
+        }
 
     _load_gateway_class()  # registers the 'dal' package
     import importlib.util
@@ -187,13 +207,18 @@ def cmd_map(_: argparse.Namespace) -> None:
         for code, cands in codes.items():
             current = profile.codes.get(code) if profile else None
             current_dp = current.dp if current else None
-            if not cands:
-                verdict = "NO MATCH (value changed between snapshots, or not exposed locally)"
-            elif len(cands) == 1:
-                dp = next(iter(cands))
-                verdict = f"DP {dp}" + ("" if current_dp in (None, dp) else f"  <-- profiles.py says {current_dp}!")
+            ranked = sorted(cands.items(), key=lambda kv: (-kv[1], int(kv[0])))
+            if not ranked:
+                verdict = "NO MATCH (not reported locally, or value changed between snapshots)"
+            elif len(ranked) == 1 or ranked[0][1] > ranked[1][1]:
+                dp, n = ranked[0]
+                verdict = f"DP {dp}  ({n} device(s) agree)"
+                if len(ranked) > 1:
+                    verdict += f"  also fits: {[d for d, _ in ranked[1:]]}"
+                if current_dp not in (None, dp):
+                    verdict += f"  <-- profiles.py says {current_dp}!"
             else:
-                verdict = f"ambiguous: {sorted(cands, key=int)}"
+                verdict = "ambiguous: " + ", ".join(f"{d}({n})" for d, n in ranked)
                 if current_dp in cands:
                     verdict += f"  (profiles.py guess {current_dp} fits)"
             print(f"  {code:24} {verdict}")

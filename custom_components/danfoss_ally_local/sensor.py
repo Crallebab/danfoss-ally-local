@@ -75,6 +75,7 @@ async def async_setup_entry(
         entities.extend(
             DanfossLocalSensor(coordinator, cid, desc)
             for desc in SENSORS_BY_PROFILE.get(dev.profile.key, ())
+            if (point := dev.profile.codes.get(desc.code)) and point.dp is not None
         )
         entities.append(DanfossRawSensor(coordinator, cid))
     async_add_entities(entities)
