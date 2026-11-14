@@ -25,6 +25,8 @@ class DanfossSensorDescription(SensorEntityDescription):
     """Sensor bound to one Danfoss code."""
 
     code: str
+    # Used while ``code`` has not been reported yet.
+    fallback_code: str | None = None
 
 
 TEMPERATURE = DanfossSensorDescription(
@@ -60,6 +62,7 @@ HEATING_DEMAND = DanfossSensorDescription(
 VALVE_TEMPERATURE = DanfossSensorDescription(
     key="temperature",
     code="temp_current_precise",  # DP 169, 0.01 C
+    fallback_code="temp_current",  # DP 24, 0.1 C
     device_class=SensorDeviceClass.TEMPERATURE,
     native_unit_of_measurement=UnitOfTemperature.CELSIUS,
     state_class=SensorStateClass.MEASUREMENT,
@@ -107,7 +110,11 @@ class DanfossLocalSensor(DanfossLocalEntity, SensorEntity):
     @property
     def native_value(self) -> Any:
         """Return the decoded value."""
-        return self.device.value(self.entity_description.code)
+        desc = self.entity_description
+        value = self.device.value(desc.code)
+        if value is None and desc.fallback_code is not None:
+            value = self.device.value(desc.fallback_code)
+        return value
 
 
 class DanfossRawSensor(DanfossLocalEntity, SensorEntity):

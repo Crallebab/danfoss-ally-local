@@ -150,6 +150,10 @@ class DanfossLocalClimate(DanfossLocalEntity, ClimateEntity):
             optimistic={"temp_set": temperature},
         )
 
+    async def async_turn_on(self) -> None:
+        """Return to the schedule (the default would pick manual mode)."""
+        await self.async_set_hvac_mode(HVACMode.AUTO)
+
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Switch Danfoss mode."""
         await self.coordinator.async_write(self._cid, {"mode": preset_mode})

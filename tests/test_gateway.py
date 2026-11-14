@@ -21,6 +21,11 @@ class FakeDevice:
         self.cid = cid
         self.parent = parent
         self.closed = False
+        self.received_wrong_cid_queue = []
+        self.cache = None
+
+    def cached_status(self, nowait=False):
+        return self.cache
 
     def set_socketTimeout(self, seconds):  # noqa: N802 - tinytuya's name
         pass
@@ -136,3 +141,40 @@ def test_closed_gateway_never_reconnects():
     with pytest.raises(gateway.GatewayError, match="closed"):
         gw.status("cid1")
     assert len(script.devices) == 2  # gateway + one child, nothing new after close
+
+
+def test_none_reply_to_a_write_is_success():
+    # tinytuya returns None when the gateway ACKs a command without a DP report.
+    gw, script = make([None])
+    gw.set_dps("cid1", {"30": True})
+    assert len(script.calls) == 1  # not re-sent
+
+
+def test_none_reply_to_a_status_is_retried():
+    gw, script = make([None, {"dps": {"16": 205}}])
+    assert gw.status("cid1") == {"16": 205}
+    assert len(script.calls) == 2
+
+
+def test_status_prefers_the_in_order_cache_over_a_replayed_reply():
+    # The reply handed back is an old queued update; the child's cache has the
+    # messages in arrival order and is the truth.
+    gw, script = make([{"dps": {"24": 193}}])
+    child = gw._child("cid1")
+    child.cache = {"dps": {"24": 189, "170": 20}}
+    assert gw.status("cid1") == {"24": 189, "170": 20}
+
+
+def test_status_clears_the_parked_update_queue():
+    gw, script = make([{"dps": {"24": 189}}])
+    parent = gw._gateway()
+    parent.received_wrong_cid_queue.append(("child", {"dps": {"24": 193}}))
+    gw.status("cid1")
+    assert parent.received_wrong_cid_queue == []
+
+
+def test_a_push_in_place_of_the_subdevice_list_is_an_error():
+    push = {"dps": {"24": 189}, "cid": "cid1"}
+    gw, _ = make([push, push])
+    with pytest.raises(gateway.GatewayError, match="no sub-device list"):
+        gw.list_subdevices()

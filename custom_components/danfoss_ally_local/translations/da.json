@@ -1,0 +1,107 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Danfoss Ally Gateway (lokal)",
+        "description": "Forbind til gatewayen over dit lokale netværk med Tuyas LAN-protokol. Se README for, hvordan du finder enheds-id og lokal nøgle til din egen gateway.",
+        "data": {
+          "host": "Vært",
+          "device_id": "Gatewayens enheds-id",
+          "local_key": "Lokal nøgle",
+          "protocol_version": "Protokolversion"
+        },
+        "data_description": {
+          "host": "IP-adressen på Danfoss Ally Gateway. Giv den en fast adresse i din router.",
+          "device_id": "Gatewayens Tuya-enheds-id (22 tegn).",
+          "local_key": "Gatewayens lokale Tuya-nøgle (16 tegn). Den ændres, hvis gatewayen nulstilles eller parres igen.",
+          "protocol_version": "Version af Tuyas LAN-protokol. Ally-gateways bruger 3.5."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Indtast gatewayens lokale nøgle igen",
+        "description": "Gatewayen afviste den lokale nøgle. Det sker, hvis gatewayen er blevet nulstillet eller parret igen.",
+        "data": {
+          "local_key": "Lokal nøgle",
+          "protocol_version": "Protokolversion"
+        },
+        "data_description": {
+          "local_key": "Gatewayens lokale Tuya-nøgle (16 tegn). Den ændres, hvis gatewayen nulstilles eller parres igen.",
+          "protocol_version": "Version af Tuyas LAN-protokol. Ally-gateways bruger 3.5."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kunne ikke få forbindelse til gatewayen. Tjek IP-adressen, og at intet andet (LocalTuya, tinytuya) optager den ene lokale forbindelse.",
+      "invalid_auth": "Gatewayen afviste den lokale nøgle eller protokolversionen.",
+      "no_subdevices": "Forbundet, men gatewayen rapporterede ingen underenheder."
+    },
+    "abort": {
+      "already_configured": "Denne gateway er allerede konfigureret.",
+      "reauth_successful": "Den nye nøgle virker. Genindlæser."
+    }
+  },
+  "entity": {
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "at_home": "Hjemme",
+              "leaving_home": "Ude",
+              "manual": "Manuel",
+              "holiday": "Ferie",
+              "pause": "Pause"
+            }
+          }
+        }
+      }
+    },
+    "sensor": {
+      "heating_demand": {
+        "name": "Varmebehov"
+      },
+      "raw_dps": {
+        "name": "Rå datapunkter"
+      }
+    },
+    "switch": {
+      "preheat": {
+        "name": "Forvarmning"
+      },
+      "child_lock": {
+        "name": "Børnesikring"
+      },
+      "window_detection": {
+        "name": "Registrering af åbent vindue"
+      }
+    },
+    "number": {
+      "at_home_temperature": {
+        "name": "Hjemme-temperatur"
+      },
+      "away_temperature": {
+        "name": "Ude-temperatur"
+      },
+      "pause_temperature": {
+        "name": "Pause-temperatur"
+      }
+    },
+    "select": {
+      "mounting": {
+        "name": "Montering",
+        "state": {
+          "horizontal": "Vandret",
+          "vertical": "Lodret"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Enhedsnavne",
+        "description": "Gatewayens lokale protokol indeholder ingen navne, så giv hver enhed et navn her. Felterne er mærket med enhedens Zigbee-node-id; ryd et felt for at gå tilbage til standardnavnet."
+      }
+    }
+  }
+}

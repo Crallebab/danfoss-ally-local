@@ -36,8 +36,10 @@ class GatewayAuthError(GatewayError):
     """The gateway rejected the session twice in a row: probably a wrong key."""
 
 
-def _check(result: Any, what: str) -> dict[str, Any]:
+def _check(result: Any, what: str, none_ok: bool = False) -> dict[str, Any]:
     if result is None:
+        if none_ok:
+            return {}
         raise GatewayError(f"{what}: no response")
     if not isinstance(result, dict):
         raise GatewayError(f"{what}: unexpected response {result!r}")
@@ -113,7 +115,7 @@ class DanfossGateway:
         self._gw = None
         self._children = {}
 
-    def _call(self, what: str, func: Callable[[], Any]) -> dict[str, Any]:
+    def _call(self, what: str, func: Callable[[], Any], none_ok: bool = False) -> dict[str, Any]:
         """Run one request; on any failure reconnect and retry once.
 
         The gateway sometimes ignores the first request on a fresh socket shortly
@@ -125,7 +127,7 @@ class DanfossGateway:
                 if self._closed:
                     raise GatewayError(f"{what}: connection is closed")
                 try:
-                    return _check(func(), what)
+                    return _check(func(), what, none_ok)
                 except GatewayError as err:
                     self._reset()
                     if attempt == 2:
@@ -138,8 +140,9 @@ class DanfossGateway:
         """Return ``{cid: online}`` for every sub-device paired to the gateway."""
         result = self._call("subdev_query", lambda: self._gateway().subdev_query())
         data = result.get("data", result)
-        if not isinstance(data, dict):
-            raise GatewayError(f"subdev_query: unexpected payload {result!r}")
+        # An unsolicited DP push can arrive in place of the reply; it has neither list.
+        if not isinstance(data, dict) or not ("online" in data or "offline" in data):
+            raise GatewayError("subdev_query: reply carries no sub-device list")
         found: dict[str, bool] = {}
         for cid in data.get("online", []) or []:
             found[str(cid)] = True
@@ -149,7 +152,26 @@ class DanfossGateway:
 
     def status(self, cid: str) -> dict[str, Any]:
         """Return the raw DP dict of one sub-device."""
-        result = self._call(f"status {cid}", lambda: self._child(cid).status())
+
+        def query() -> Any:
+            child = self._child(cid)
+            # While waiting for one child, tinytuya parks updates from other
+            # children in this queue and may later replay an old entry as if it
+            # were the fresh reply. Everything parked there is already merged
+            # into each child's cached status, so the queue can be dropped.
+            queue = getattr(self._gateway(), "received_wrong_cid_queue", None)
+            if queue:
+                queue.clear()
+            result = child.status()
+            if isinstance(result, dict) and "Err" not in result:
+                # The cached status holds every message from this child in
+                # arrival order, including pushes seen during other requests.
+                cached = child.cached_status(nowait=True)
+                if isinstance(cached, dict) and isinstance(cached.get("dps"), dict):
+                    return {**result, "dps": dict(cached["dps"])}
+            return result
+
+        result = self._call(f"status {cid}", query)
         dps = result.get("dps")
         if not isinstance(dps, dict):
             raise GatewayError(f"status {cid}: no dps in {result!r}")
@@ -162,8 +184,10 @@ class DanfossGateway:
         bad = FORBIDDEN_WRITE_DPS.intersection(raw)
         if bad:
             raise GatewayError(f"refusing to write forbidden DP(s) {sorted(bad)}")
-        # DP values are absolute, so a retry after a lost reply is safe.
-        self._call(f"set {cid}", lambda: self._child(cid).set_multiple_values(raw))
+        # tinytuya returns None when the gateway acknowledged the command but sent
+        # no DP report in time (unchanged value, sleeping valve): that is success.
+        # DP values are absolute, so a retry after a real failure is safe.
+        self._call(f"set {cid}", lambda: self._child(cid).set_multiple_values(raw), none_ok=True)
 
     def close(self) -> None:
         """Close the socket for good; later calls fail instead of reconnecting."""
