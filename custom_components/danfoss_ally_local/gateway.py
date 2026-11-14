@@ -7,8 +7,10 @@ its socket.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 import threading
+import time
 from typing import Any
 
 import tinytuya
@@ -19,6 +21,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # tinytuya error codes that mean the key or protocol version is wrong.
 _AUTH_ERRORS = {"914", "904"}
+_RETRY_DELAY = 2.0
 
 
 class GatewayError(Exception):
@@ -89,14 +92,30 @@ class DanfossGateway:
         self._gw = None
         self._children = {}
 
+    def _call(self, what: str, func: Callable[[], Any]) -> dict[str, Any]:
+        """Run one request; on a transient failure reconnect and retry once.
+
+        The gateway sometimes ignores the first request on a fresh socket shortly
+        after another connection closed (seen right after the config flow test).
+        """
+        with self._lock:
+            for attempt in (1, 2):
+                try:
+                    return _check(func(), what)
+                except GatewayAuthError:
+                    self._reset()
+                    raise
+                except GatewayError as err:
+                    self._reset()
+                    if attempt == 2:
+                        raise
+                    _LOGGER.debug("%s failed (%s); reconnecting and retrying", what, err)
+                    time.sleep(_RETRY_DELAY)
+        raise AssertionError("unreachable")
+
     def list_subdevices(self) -> dict[str, bool]:
         """Return ``{cid: online}`` for every sub-device paired to the gateway."""
-        with self._lock:
-            try:
-                result = _check(self._gateway().subdev_query(), "subdev_query")
-            except GatewayError:
-                self._reset()
-                raise
+        result = self._call("subdev_query", lambda: self._gateway().subdev_query())
         data = result.get("data", result)
         if not isinstance(data, dict):
             raise GatewayError(f"subdev_query: unexpected payload {result!r}")
@@ -109,12 +128,7 @@ class DanfossGateway:
 
     def status(self, cid: str) -> dict[str, Any]:
         """Return the raw DP dict of one sub-device."""
-        with self._lock:
-            try:
-                result = _check(self._child(cid).status(), f"status {cid}")
-            except GatewayError:
-                self._reset()
-                raise
+        result = self._call(f"status {cid}", lambda: self._child(cid).status())
         dps = result.get("dps")
         if not isinstance(dps, dict):
             raise GatewayError(f"status {cid}: no dps in {result!r}")
@@ -125,12 +139,8 @@ class DanfossGateway:
         bad = FORBIDDEN_WRITE_DPS.intersection(values)
         if bad:
             raise GatewayError(f"refusing to write forbidden DP(s) {sorted(bad)}")
-        with self._lock:
-            try:
-                _check(self._child(cid).set_multiple_values(values), f"set {cid}")
-            except GatewayError:
-                self._reset()
-                raise
+        # Setting DPs is idempotent, so a retry after a lost reply is safe.
+        self._call(f"set {cid}", lambda: self._child(cid).set_multiple_values(values))
 
     def close(self) -> None:
         """Close the socket."""
