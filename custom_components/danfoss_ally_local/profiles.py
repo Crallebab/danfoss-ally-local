@@ -95,22 +95,28 @@ RADIATOR_THERMOSTAT = Profile(
         "manual_mode_fast": DataPoint("114", 10, writable=True),  # 5/5
         "ext_measured_rs": DataPoint("158", 100),  # 3/3, -80.00 = no room sensor
         "OccupiedSetpoint": DataPoint("171", 100),  # 5/5
-        # Unresolved: values coincide (all True / all 1) or never reported locally.
-        # Candidates noted for the next mapping round.
-        "switch": DataPoint(None),
-        "child_lock": DataPoint(None),  # 30 / 116 / 161 / 163
-        "window_state": DataPoint(None),  # 25 / 117
-        "window_toggle": DataPoint(None),
-        "window_state_info": DataPoint(None),  # 25 / 117
-        "pi_heating_demand": DataPoint(None),  # 170 / 173
-        "radiator_covered": DataPoint(None),  # 140 / 159
-        "at_home_setting": DataPoint(None, 10),  # 113 / 118
-        "leaving_home_setting": DataPoint(None, 10),  # 109 / 112 / 119
-        "pause_setting": DataPoint(None, 10),
-        "holiday_setting": DataPoint(None, 10),  # 115?
+        # Mapped 2026-11-15 by toggling each setting in the Danfoss app on one
+        # valve and watching which local DP changed (tools/watch_dps.py).
+        "switch": DataPoint("1", writable=True),  # app: "Pre-heating"
+        "child_lock": DataPoint("30", writable=True),
+        "window_state": DataPoint("25"),  # "close" / "open"
+        "window_toggle": DataPoint("116", writable=True),  # app: "Open Window" detection
+        "mounting_mode": DataPoint("133", writable=True),  # "Vertical" / "Horizontal"
+        "at_home_setting": DataPoint("118", 10, writable=True),  # 113 mirrors it
+        "leaving_home_setting": DataPoint("119", 10, writable=True),  # 109/112 mirror it
+        "pause_setting": DataPoint("120", 10, writable=True),  # 110 mirrors it
+        # Local-only: room temperature in 0.01 C (matches DP 24 on 5/5 valves).
+        "temp_current_precise": DataPoint("169", 100),
+        # Cloud pi_heating_demand matched 170 on 5/5; 173 was contradicted.
+        # Only seen at its idle value so far.
+        "pi_heating_demand": DataPoint("170"),
+        # Unresolved.
+        "radiator_covered": DataPoint(None),  # 140 / 159; not in the app
+        "display_orientation": DataPoint(None),  # probably 101
+        "holiday_setting": DataPoint(None, 10),  # 115? (no holiday UI in the app)
+        "window_state_info": DataPoint(None),  # 117?
         "fault": DataPoint(None),
         "switch_state": DataPoint(None),
-        "mounting_mode_active": DataPoint(None),
         "heat_available": DataPoint(None),
         "load_balance_enable": DataPoint(None),
     },

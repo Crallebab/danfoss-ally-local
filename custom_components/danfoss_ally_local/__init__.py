@@ -6,10 +6,17 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN
+from .const import CONF_NAMES, DOMAIN, default_name
 from .coordinator import DanfossLocalConfigEntry, DanfossLocalCoordinator
 
-PLATFORMS = [Platform.CLIMATE, Platform.SENSOR]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.CLIMATE,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: DanfossLocalConfigEntry) -> bool:
@@ -28,18 +35,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: DanfossLocalConfigEntry)
         manufacturer="Danfoss",
         model="Ally Gateway (Tuya)",
     )
+    names: dict[str, str] = entry.options.get(CONF_NAMES, {})
     for cid, dev in coordinator.data.items():
-        registry.async_get_or_create(
+        name = names.get(cid) or default_name(cid, dev.profile.name)
+        device = registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, cid)},
-            name=f"Danfoss {dev.profile.name.lower()} {cid[-4:]}",
+            name=name,
             manufacturer="Danfoss",
             model=dev.profile.name,
+            serial_number=cid,
             via_device_id=gateway.id,
         )
+        if device.name != name:
+            registry.async_update_device(device.id, name=name)
 
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: DanfossLocalConfigEntry) -> None:
+    """Reload so renamed devices take effect."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: DanfossLocalConfigEntry) -> bool:

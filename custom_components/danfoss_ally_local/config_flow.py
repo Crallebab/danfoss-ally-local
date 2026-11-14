@@ -8,8 +8,9 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_HOST
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
@@ -21,10 +22,12 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_DEVICE_ID,
     CONF_LOCAL_KEY,
+    CONF_NAMES,
     CONF_PROTOCOL_VERSION,
     DEFAULT_PROTOCOL_VERSION,
     DOMAIN,
     PROTOCOL_VERSIONS,
+    default_name,
 )
 from .gateway import DanfossGateway, GatewayAuthError, GatewayError
 
@@ -47,10 +50,35 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
     )
 
 
+class DanfossAllyLocalOptionsFlow(OptionsFlow):
+    """Name the sub-devices (the gateway's local protocol carries no names)."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Show one name field per sub-device, keyed by its Zigbee node id."""
+        entry = self.config_entry
+        devices = entry.runtime_data.devices if hasattr(entry, "runtime_data") else {}
+        names: dict[str, str] = dict(entry.options.get(CONF_NAMES, {}))
+        if user_input is not None:
+            names.update({cid: name.strip() for cid, name in user_input.items() if name.strip()})
+            return self.async_create_entry(data={**entry.options, CONF_NAMES: names})
+
+        schema = {
+            vol.Optional(cid, default=names.get(cid) or default_name(cid, dev.profile.name)): str
+            for cid, dev in sorted(devices.items(), key=lambda kv: (kv[1].profile.key, kv[0]))
+        }
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))
+
+
 class DanfossAllyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> DanfossAllyLocalOptionsFlow:
+        """Return the options flow."""
+        return DanfossAllyLocalOptionsFlow()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for gateway address and local key, then test the connection."""

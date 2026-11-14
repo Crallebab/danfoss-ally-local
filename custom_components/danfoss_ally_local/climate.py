@@ -64,7 +64,9 @@ class DanfossLocalClimate(DanfossLocalEntity, ClimateEntity):
         external = self.device.value("ext_measured_rs")
         if external is not None and external > NO_EXTERNAL_SENSOR:
             return external
-        return self.device.value("temp_current")
+        # DP 169 carries the valve's own reading in 0.01 C; DP 24 in 0.1 C.
+        precise = self.device.value("temp_current_precise")
+        return precise if precise is not None else self.device.value("temp_current")
 
     @property
     def native_target_temperature(self) -> float | None:

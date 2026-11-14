@@ -9,6 +9,14 @@ from .const import DOMAIN
 from .coordinator import DanfossLocalCoordinator, SubDevice
 
 
+def mapped(dev: SubDevice, code: str, writable: bool = False) -> bool:
+    """Return whether a code has a confirmed DP on this device (and is writable)."""
+    point = dev.profile.codes.get(code)
+    if point is None or point.dp is None:
+        return False
+    return dev.profile.confirmed and point.writable if writable else True
+
+
 class DanfossLocalEntity(CoordinatorEntity[DanfossLocalCoordinator]):
     """An entity belonging to one sub-device."""
 
