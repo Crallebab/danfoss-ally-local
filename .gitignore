@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Never commit device secrets or snapshots
+secrets.json
+*.local.json
+snapshots/

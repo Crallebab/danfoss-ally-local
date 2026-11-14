@@ -1,0 +1,13 @@
+{
+  "domain": "danfoss_ally_local",
+  "name": "Danfoss Ally Local",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/Crallebab/danfoss-ally-local",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Crallebab/danfoss-ally-local/issues",
+  "loggers": ["tinytuya"],
+  "requirements": ["tinytuya==1.21.1"],
+  "version": "0.1.0"
+}

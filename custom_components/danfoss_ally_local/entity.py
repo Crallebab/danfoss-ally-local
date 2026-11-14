@@ -1,0 +1,38 @@
+"""Base entity for Danfoss Ally Local."""
+
+from __future__ import annotations
+
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN
+from .coordinator import DanfossLocalCoordinator, SubDevice
+
+
+class DanfossLocalEntity(CoordinatorEntity[DanfossLocalCoordinator]):
+    """An entity belonging to one sub-device."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: DanfossLocalCoordinator, cid: str, key: str) -> None:
+        super().__init__(coordinator)
+        self._cid = cid
+        self._attr_unique_id = f"{cid}_{key}"
+        dev = self.device
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, cid)},
+            name=f"Danfoss {dev.profile.name.lower()} {cid[-4:]}",
+            manufacturer="Danfoss",
+            model=dev.profile.name,
+            via_device=(DOMAIN, coordinator.gateway_id),
+        )
+
+    @property
+    def device(self) -> SubDevice:
+        """Return the sub-device state."""
+        return self.coordinator.data[self._cid]
+
+    @property
+    def available(self) -> bool:
+        """Return whether the sub-device is reachable."""
+        return super().available and self.device.online
