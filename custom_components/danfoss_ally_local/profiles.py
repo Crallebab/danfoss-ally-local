@@ -77,7 +77,9 @@ RADIATOR_THERMOSTAT = Profile(
     key="radiator_thermostat",
     name="Radiator thermostat",
     detect=frozenset({"2", "16", "24"}),
-    confirmed=False,
+    # Write test 2026-11-14 on one valve: mode=manual + manual_mode_fast=205
+    # written locally showed up in the Danfoss cloud; mode restore also worked.
+    confirmed=True,
     # Mapped 2026-11-14 on 5 Ally radiator thermostats (Tuya product den6kzk0) by
     # comparing local DPs with the Danfoss cloud snapshot (tools/danfoss_probe.py map).
     # "5/5" = value matched on every valve; "1/1" = only one valve reported the DP.
