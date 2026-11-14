@@ -57,8 +57,17 @@ HEATING_DEMAND = DanfossSensorDescription(
     state_class=SensorStateClass.MEASUREMENT,
 )
 
+VALVE_TEMPERATURE = DanfossSensorDescription(
+    key="temperature",
+    code="temp_current_precise",  # DP 169, 0.01 C
+    device_class=SensorDeviceClass.TEMPERATURE,
+    native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+    state_class=SensorStateClass.MEASUREMENT,
+    suggested_display_precision=1,
+)
+
 SENSORS_BY_PROFILE = {
-    RADIATOR_THERMOSTAT.key: (BATTERY, HEATING_DEMAND),
+    RADIATOR_THERMOSTAT.key: (VALVE_TEMPERATURE, BATTERY, HEATING_DEMAND),
     ROOM_SENSOR.key: (TEMPERATURE, HUMIDITY, BATTERY),
 }
 
