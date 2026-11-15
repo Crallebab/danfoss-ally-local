@@ -252,11 +252,7 @@ class DanfossGateway:
             # list. The reply is then the next message on the same socket (the
             # push itself is already in the cache of its child).
             for _ in range(_PUSHES_BEFORE_REPLY):
-                if (
-                    not isinstance(result, dict)
-                    or "Err" in result
-                    or _has_subdevice_list(result)
-                ):
+                if not isinstance(result, dict) or "Err" in result or _has_subdevice_list(result):
                     return result
                 result = gw.receive()
             if isinstance(result, dict) and "Err" not in result and not _has_subdevice_list(result):
@@ -308,7 +304,9 @@ class DanfossGateway:
         # tinytuya returns None when the gateway acknowledged the command but sent
         # no DP report in time (unchanged value, sleeping valve): that is success.
         # DP values are absolute, so a retry after a real failure is safe.
-        self._call(f"set {cid[-4:]}", lambda: self._child(cid).set_multiple_values(raw), none_ok=True)
+        self._call(
+            f"set {cid[-4:]}", lambda: self._child(cid).set_multiple_values(raw), none_ok=True
+        )
 
     def close(self) -> None:
         """Close the socket for good; later calls fail instead of reconnecting."""

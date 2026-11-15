@@ -28,7 +28,9 @@ def fetch(base: str, token: str) -> dict[str, dict]:
     return {
         s["attributes"]["cid"]: s["attributes"].get("dps", {})
         for s in states
-        if s["entity_id"].startswith("sensor.") and s["entity_id"].endswith(SUFFIX) and "cid" in s["attributes"]
+        if s["entity_id"].startswith("sensor.")
+        and s["entity_id"].endswith(SUFFIX)
+        and "cid" in s["attributes"]
     }
 
 
@@ -48,7 +50,9 @@ def main() -> None:
         return names.get(cid[-4:], cid[-4:])
 
     prev = fetch(a.base, token)
-    print(time.strftime("%H:%M:%S"), "watching", ", ".join(sorted(label(c) for c in prev)), flush=True)
+    print(
+        time.strftime("%H:%M:%S"), "watching", ", ".join(sorted(label(c) for c in prev)), flush=True
+    )
     while True:
         time.sleep(a.interval)
         try:
@@ -61,7 +65,10 @@ def main() -> None:
             for dp in sorted(set(dps) | set(old), key=int):
                 if dps.get(dp) != old.get(dp):
                     stamp = time.strftime("%H:%M:%S")
-                    print(f"{stamp}  {label(cid):22} DP {dp:>4}: {old.get(dp)!r} -> {dps.get(dp)!r}", flush=True)
+                    print(
+                        f"{stamp}  {label(cid):22} DP {dp:>4}: {old.get(dp)!r} -> {dps.get(dp)!r}",
+                        flush=True,
+                    )
         prev = cur
 
 

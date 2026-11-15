@@ -1,20 +1,25 @@
 """Read-only probe for a Danfoss Ally gateway. Never writes to any device.
 
-    pip install tinytuya pydanfossally
+pip install tinytuya pydanfossally
 
-    python danfoss_probe.py scan
-        Listen for Tuya broadcasts; prints gateway id, IP and protocol version.
+python danfoss_probe.py scan
+    Listen for Tuya broadcasts; prints gateway id, IP and protocol version.
 
-    python danfoss_probe.py local --host IP --gw-id ID --key KEY [--version 3.5]
-        List sub-devices and dump their raw DPs to snapshots/local.json.
+python danfoss_probe.py local --host IP --gw-id ID --key KEY [--version 3.5]
+    List sub-devices and dump their raw DPs to snapshots/local.json.
 
-    DANFOSS_KEY=... DANFOSS_SECRET=... python danfoss_probe.py cloud
-        Dump the Danfoss cloud view (code -> value) to snapshots/cloud.json.
-        Uses the same API key/secret as the Danfoss Ally cloud integration.
+python danfoss_probe.py listen --host IP --gw-id ID [--minutes 10]
+    Print every message the gateway sends while you change settings in the
+    Danfoss app, including messages from ids it does not list as sub-devices
+    (e.g. a room that groups a room sensor with its thermostats).
 
-    python danfoss_probe.py map
-        Match local DP numbers to Danfoss codes by comparing the two snapshots.
-        Take both snapshots within a minute of each other for best results.
+DANFOSS_KEY=... DANFOSS_SECRET=... python danfoss_probe.py cloud
+    Dump the Danfoss cloud view (code -> value) to snapshots/cloud.json.
+    Uses the same API key/secret as the Danfoss Ally cloud integration.
+
+python danfoss_probe.py map
+    Match local DP numbers to Danfoss codes by comparing the two snapshots.
+    Take both snapshots within a minute of each other for best results.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from typing import Any
 
 SNAPSHOTS = Path(__file__).resolve().parent.parent / "snapshots"
@@ -45,8 +51,10 @@ def cmd_scan(_: argparse.Namespace) -> None:
     if not found:
         print("No Tuya broadcasts seen. Same subnet? Firewall allowing UDP 6666/6667/7000?")
     for ip, info in found.items():
-        print(f"{ip}  gwId={info.get('gwId')}  version={info.get('version')}  "
-              f"productKey={info.get('productKey')}")
+        print(
+            f"{ip}  gwId={info.get('gwId')}  version={info.get('version')}  "
+            f"productKey={info.get('productKey')}"
+        )
 
 
 def _load_gateway_class() -> type:
@@ -91,6 +99,68 @@ def cmd_local(args: argparse.Namespace) -> None:
     finally:
         gw.close()
     print(f"saved {_save('local.json', out)}")
+
+
+def cmd_listen(args: argparse.Namespace) -> None:
+    """Print every message the gateway sends, including ones from unlisted ids."""
+    if not args.key:
+        sys.exit("Set DANFOSS_LOCAL_KEY or pass --key")
+    DanfossGateway = _load_gateway_class()  # noqa: N806
+
+    gw = DanfossGateway(args.host, args.gw_id, args.key, args.version)
+    seen: dict[str, dict[str, Any]] = {}
+    try:
+        try:
+            listed = gw.list_subdevices()
+        except Exception as err:  # noqa: BLE001
+            sys.exit(f"Gateway error: {err}")
+        print(f"{len(listed)} sub-devices listed: {', '.join(cid[-4:] for cid in listed)}")
+        print(f"Listening for {args.minutes:g} min. Change one setting at a time in the app.")
+        deadline = time.monotonic() + args.minutes * 60
+        next_beat = 0.0
+        while time.monotonic() < deadline:
+            # No children are registered, so tinytuya hands every message over
+            # as it is, whatever id it comes from.
+            dev = gw._gateway()  # noqa: SLF001 - raw messages wanted
+            if time.monotonic() >= next_beat:
+                dev.heartbeat(nowait=True)  # keeps the gateway from closing the idle socket
+                next_beat = time.monotonic() + 10
+            msg = dev.receive()  # None after the socket timeout
+            if not isinstance(msg, dict):
+                continue
+            stamp = time.strftime("%H:%M:%S")
+            if "Err" in msg:
+                print(f"{stamp}  connection lost ({msg.get('Error')}); reconnecting", flush=True)
+                try:
+                    gw.list_subdevices()
+                except Exception as err:  # noqa: BLE001
+                    print(f"{stamp}  {err}", flush=True)
+                    time.sleep(5)
+                next_beat = 0.0
+                continue
+            data = msg.get("data") if isinstance(msg.get("data"), dict) else {}
+            cid = msg.get("cid") or data.get("cid")
+            dps = msg.get("dps") or data.get("dps")
+            if cid is None:
+                who = "gateway itself"
+            elif cid in listed:
+                who = str(cid)[-4:]
+            else:
+                who = f"UNLISTED id {cid}"  # in full: this is what we are looking for
+            if not isinstance(dps, dict):
+                print(f"{stamp}  {who:22} {msg}", flush=True)
+                continue
+            old = seen.setdefault(str(cid), {})
+            for dp, value in sorted(dps.items(), key=lambda kv: str(kv[0]).zfill(4)):
+                if old.get(dp, value) != value:
+                    print(f"{stamp}  {who:22} DP {dp:>4}: {old[dp]!r} -> {value!r}", flush=True)
+                elif dp not in old:
+                    print(f"{stamp}  {who:22} DP {dp:>4}: {value!r}", flush=True)
+                old[dp] = value
+    except KeyboardInterrupt:
+        pass
+    finally:
+        gw.close()
 
 
 def _redact(obj: Any) -> Any:
@@ -165,7 +235,9 @@ def cmd_map(_: argparse.Namespace) -> None:
     print("Pairing (local cid -> cloud device):")
     for cid in local:
         idx = pairs.get(cid)
-        print(f"  {cid} -> {cloud[idx]['name'] + ' [' + cloud[idx]['type'] + ']' if idx is not None else 'UNMATCHED'}")
+        print(
+            f"  {cid} -> {cloud[idx]['name'] + ' [' + cloud[idx]['type'] + ']' if idx is not None else 'UNMATCHED'}"
+        )
 
     # 2. Per device type and code, score every DP number. The gateway only returns
     #    the DPs it has cached for each sub-device, so a DP missing on one device is
@@ -227,21 +299,39 @@ def cmd_map(_: argparse.Namespace) -> None:
                 if current_dp in cands:
                     verdict += f"  (profiles.py guess {current_dp} fits)"
             print(f"  {code:24} {verdict}")
-    print("\nAmbiguous codes: change that setting in the Danfoss app, re-run "
-          "'local' and 'cloud', then 'map' again.")
+    print(
+        "\nAmbiguous codes: change that setting in the Danfoss app, re-run "
+        "'local' and 'cloud', then 'map' again."
+    )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("scan").set_defaults(func=cmd_scan)
     p = sub.add_parser("local")
     p.add_argument("--host", required=True)
     p.add_argument("--gw-id", required=True)
-    p.add_argument("--key", default=os.environ.get("DANFOSS_LOCAL_KEY"),
-                   help="local key; prefer the DANFOSS_LOCAL_KEY env var (keeps it out of shell history)")
+    p.add_argument(
+        "--key",
+        default=os.environ.get("DANFOSS_LOCAL_KEY"),
+        help="local key; prefer the DANFOSS_LOCAL_KEY env var (keeps it out of shell history)",
+    )
     p.add_argument("--version", default="3.5")
     p.set_defaults(func=cmd_local)
+    p = sub.add_parser("listen")
+    p.add_argument("--host", required=True)
+    p.add_argument("--gw-id", required=True)
+    p.add_argument(
+        "--key",
+        default=os.environ.get("DANFOSS_LOCAL_KEY"),
+        help="local key; prefer the DANFOSS_LOCAL_KEY env var (keeps it out of shell history)",
+    )
+    p.add_argument("--version", default="3.5")
+    p.add_argument("--minutes", type=float, default=10)
+    p.set_defaults(func=cmd_listen)
     sub.add_parser("cloud").set_defaults(func=cmd_cloud)
     sub.add_parser("map").set_defaults(func=cmd_map)
     args = parser.parse_args()

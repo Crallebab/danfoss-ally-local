@@ -1,0 +1,55 @@
+name: Bug report
+description: Something does not work as described in the README.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never post your local key.** Treat it like a password. If it ends up in an
+        issue, pair the gateway again to get a new one.
+
+        Do not attach debug logs for `tinytuya`: that library can print key material.
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      description: Shown under Settings → Devices & services → Danfoss Ally Local.
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+    validations:
+      required: true
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device concerned
+      options:
+        - Gateway / connection
+        - Ally Radiator Thermostat
+        - Ally Room Sensor
+        - Another device behind the gateway
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: >
+        Settings → Devices & services → Danfoss Ally Local → ⋮ → Download diagnostics,
+        then attach the file. The key, the address and the full device ids are
+        already removed from it.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log lines
+      description: Lines from the Home Assistant log that mention `danfoss_ally_local`.
+      render: text

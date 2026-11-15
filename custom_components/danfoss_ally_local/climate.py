@@ -162,7 +162,5 @@ class DanfossLocalClimate(DanfossLocalEntity, ClimateEntity):
         """Map an HVAC mode to a Danfoss mode."""
         if hvac_mode == HVACMode.AUTO and self.device.value("mode") in SCHEDULE_MODES:
             return  # already on the schedule; don't override "away" with "at home"
-        mode = {HVACMode.AUTO: "at_home", HVACMode.HEAT: "manual", HVACMode.OFF: "pause"}[
-            hvac_mode
-        ]
+        mode = {HVACMode.AUTO: "at_home", HVACMode.HEAT: "manual", HVACMode.OFF: "pause"}[hvac_mode]
         await self.coordinator.async_write(self._cid, {"mode": mode})

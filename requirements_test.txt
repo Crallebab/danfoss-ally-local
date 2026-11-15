@@ -1,0 +1,7 @@
+# Everything the tests and the lint step need. The gateway, device and profile
+# tests run with just pytest and tinytuya; the coordinator and config flow tests
+# also need the Home Assistant test harness and are skipped without it.
+pytest
+pytest-homeassistant-custom-component
+ruff
+tinytuya==1.21.1

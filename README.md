@@ -74,6 +74,15 @@ Configure**.
   integration is loaded.
 - **Valves report slowly.** Battery-powered valves send updates every few
   minutes, so a change can take a while to show.
+- **Settings start out unknown.** The gateway only hands out what a valve has
+  reported to it, and valves report most settings only when they change. Until
+  then pre-heating, open-window detection, pause temperature and mounting show
+  as unknown; they still work, and setting one from Home Assistant or the
+  Danfoss app makes it known. The open-window sensor appears once the valve has
+  reported a window state.
+- **Rooms with several thermostats.** The Danfoss app writes a room's settings
+  to every thermostat in the room. Home Assistant writes to the one thermostat
+  you change, so change a setting on each of them to keep the room in step.
 - **Setting a temperature switches the valve to manual**, like the Danfoss app.
   Choose the *Auto* mode to return to the schedule.
 - **Safety.** Writes are only sent to recognised, confirmed device types, and
@@ -92,11 +101,15 @@ app are not affected.
 ## Development
 
 ```
-pip install pytest tinytuya
+pip install -r requirements_test.txt
 pytest
+ruff check . && ruff format --check .
 ```
 
-The unit tests need neither Home Assistant nor a gateway.
+No test needs a gateway. The gateway, device and profile tests run with just
+`pip install pytest tinytuya`; the coordinator and config flow tests also need
+the Home Assistant test harness (`pytest-homeassistant-custom-component`, Linux
+or macOS only) and are skipped without it.
 
 ### Mapping more data points
 
@@ -106,6 +119,9 @@ which setting:
 - `danfoss_probe.py scan`: find the gateway on the network.
 - `danfoss_probe.py local`: dump each sub-device's raw data points (set
   `DANFOSS_LOCAL_KEY`; the integration must be disabled meanwhile).
+- `danfoss_probe.py listen`: print every message the gateway sends while you
+  change settings in the Danfoss app, including messages from ids it does not
+  list as sub-devices (same key and disabled integration as `local`).
 - `danfoss_probe.py cloud` and `map`: compare with the Danfoss cloud view.
 - `watch_dps.py`: print data point changes through the Home Assistant API while
   you change one setting at a time in the Danfoss app.
@@ -113,3 +129,7 @@ which setting:
 Snapshots go to `snapshots/`, which is git-ignored. `deploy.sh` copies the
 integration to a Home Assistant host over SSH.
 <!-- ha-marketplace:exclude-end -->
+
+## License
+
+[MIT](LICENSE)

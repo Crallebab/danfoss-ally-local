@@ -23,10 +23,16 @@ class DanfossSwitchDescription(SwitchEntityDescription):
 
 SWITCHES = (
     DanfossSwitchDescription(
-        key="preheat", translation_key="preheat", code="switch", entity_category=EntityCategory.CONFIG
+        key="preheat",
+        translation_key="preheat",
+        code="switch",
+        entity_category=EntityCategory.CONFIG,
     ),
     DanfossSwitchDescription(
-        key="child_lock", translation_key="child_lock", code="child_lock", entity_category=EntityCategory.CONFIG
+        key="child_lock",
+        translation_key="child_lock",
+        code="child_lock",
+        entity_category=EntityCategory.CONFIG,
     ),
     DanfossSwitchDescription(
         key="window_detection",

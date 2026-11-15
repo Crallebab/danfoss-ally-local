@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "BLE", "N", "SLF", "SIM"]
+ignore = ["E501", "SIM105"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+combine-as-imports = true
+known-first-party = ["homeassistant", "conftest", "custom_components"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["SLF001"]
