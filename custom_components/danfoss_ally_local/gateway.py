@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import logging
-import select
+import selectors
+import socket
 import threading
 import time
 from typing import Any
@@ -33,15 +34,40 @@ _RETRY_DELAY = 2.0
 _SOCKET_TIMEOUT = 5.0
 # Upper bound on buffered messages read before one request.
 _DRAIN_MAX_MESSAGES = 25
+# Socket timeout while draining. The data is already there, so this only bounds
+# the wait when it turns out to be an empty or incomplete frame.
+_DRAIN_TIMEOUT = 0.5
+# Pushes read while waiting for the reply to a sub-device query.
+_PUSHES_BEFORE_REPLY = 5
 
 
 def _readable(sock: Any) -> bool:
     """Return whether ``sock`` has data waiting, without blocking."""
     try:
-        ready, _, _ = select.select([sock], [], [], 0)
+        # Not select.select: it fails for file descriptors of 1024 and above.
+        with selectors.DefaultSelector() as selector:
+            selector.register(sock, selectors.EVENT_READ)
+            return bool(selector.select(0))
     except (OSError, ValueError, TypeError):
         return False
-    return bool(ready)
+
+
+def _waiting(sock: Any) -> bool | None:
+    """Return whether ``sock`` has data waiting; None if the peer closed it."""
+    if not _readable(sock):
+        return False
+    try:
+        # A closed or reset connection is readable too, but has no data.
+        return True if sock.recv(1, socket.MSG_PEEK) else None
+    except (BlockingIOError, InterruptedError, TimeoutError):
+        return False
+    except OSError:
+        return None
+
+
+def _has_subdevice_list(result: Any) -> bool:
+    data = result.get("data", result)
+    return isinstance(data, dict) and ("online" in data or "offline" in data)
 
 
 class GatewayError(Exception):
@@ -145,26 +171,45 @@ class DanfossGateway:
         for the reply and the real reply left behind for the next request. Each
         message read here is merged into the cached status of its child.
 
-        Only reads when data is waiting, so an empty buffer costs nothing and
-        tinytuya's timeout and reconnect paths are not entered.
+        Only reads when data is waiting, so an empty buffer costs nothing. A
+        connection the gateway closed is dropped here, before tinytuya would
+        reconnect inside a read, and the socket timeout is short while reading,
+        so an empty or incomplete frame cannot stall the request.
         """
         gw = self._gateway()
-        sock = getattr(gw, "socket", None)
-        if sock is None:
-            return  # not connected yet: nothing can be buffered
-        for _ in range(_DRAIN_MAX_MESSAGES):
-            if not _readable(sock):
-                break
-            message = gw.receive()
-            if not isinstance(message, dict) or "Err" in message:
-                break
-            if getattr(gw, "socket", None) is not sock:
-                break  # tinytuya replaced the connection
-        # Updates parked for other children are in their caches by now; a stale
-        # entry must not be replayed as a reply.
+        # Updates parked for other children are in their caches already; a
+        # stale entry must not be replayed as a reply, and tinytuya would hand
+        # it out in place of reading the socket.
         queue = getattr(gw, "received_wrong_cid_queue", None)
         if queue:
             queue.clear()
+        sock = getattr(gw, "socket", None)
+        if sock is None:
+            return  # not connected yet: nothing can be buffered
+        shortened = False
+        try:
+            for _ in range(_DRAIN_MAX_MESSAGES):
+                waiting = _waiting(sock)
+                if waiting is None:
+                    _LOGGER.debug("The gateway closed the connection; reconnecting")
+                    self._reset()
+                    return
+                if not waiting:
+                    break
+                if not shortened:
+                    sock.settimeout(_DRAIN_TIMEOUT)
+                    shortened = True
+                message = gw.receive()
+                if not isinstance(message, dict) or "Err" in message:
+                    break
+                if getattr(gw, "socket", None) is not sock:
+                    break  # tinytuya replaced the connection
+        finally:
+            if shortened:
+                try:
+                    sock.settimeout(_SOCKET_TIMEOUT)
+                except OSError:
+                    pass  # closed meanwhile
 
     def _call(self, what: str, func: Callable[[], Any], none_ok: bool = False) -> dict[str, Any]:
         """Run one request; on a failure reconnect and retry once.
@@ -201,13 +246,22 @@ class DanfossGateway:
         """Return ``{cid: online}`` for every sub-device paired to the gateway."""
 
         def query() -> Any:
-            result = self._gateway().subdev_query()
-            if isinstance(result, dict) and "Err" not in result:
-                data = result.get("data", result)
-                # A DP push can still slip in ahead of the reply; it has neither
-                # list. Raising here makes _call reconnect and ask again.
-                if not isinstance(data, dict) or not ("online" in data or "offline" in data):
-                    raise GatewayError("subdev_query: reply carries no sub-device list")
+            gw = self._gateway()
+            result = gw.subdev_query()
+            # A DP push can still slip in ahead of the reply; it has neither
+            # list. The reply is then the next message on the same socket (the
+            # push itself is already in the cache of its child).
+            for _ in range(_PUSHES_BEFORE_REPLY):
+                if (
+                    not isinstance(result, dict)
+                    or "Err" in result
+                    or _has_subdevice_list(result)
+                ):
+                    return result
+                result = gw.receive()
+            if isinstance(result, dict) and "Err" not in result and not _has_subdevice_list(result):
+                # Nothing but pushes: make _call reconnect and ask again.
+                raise GatewayError("subdev_query: reply carries no sub-device list")
             return result
 
         result = self._call("subdev_query", query)

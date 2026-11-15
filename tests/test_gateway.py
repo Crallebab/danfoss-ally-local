@@ -41,6 +41,22 @@ class FakeDevice:
         self.closed = True
 
 
+class FakeSocket:
+    """Stands in for the connected socket; ``data`` is what a peek returns."""
+
+    def __init__(self, data=b"x"):
+        self.data = data
+        self.timeouts = []
+
+    def recv(self, size, flags=0):
+        if isinstance(self.data, Exception):
+            raise self.data
+        return self.data
+
+    def settimeout(self, seconds):
+        self.timeouts.append(seconds)
+
+
 class Script:
     """Factory plus a queue of replies and a log of calls."""
 
@@ -175,24 +191,67 @@ def test_status_returns_the_in_order_record_of_the_child():
 def test_buffered_pushes_are_read_before_a_request(monkeypatch):
     gw, script = make([{"dps": {"24": 189}}])
     parent = gw._gateway()
-    parent.socket = object()  # connected
+    parent.socket = sock = FakeSocket()  # connected
     parent.buffered = [{"dps": {"24": 193}, "cid": "cid2"}, {"dps": {"1": 5}, "cid": "cid3"}]
     parent.received_wrong_cid_queue.append(("child", {"dps": {"24": 193}}))
     monkeypatch.setattr(gateway, "_readable", lambda sock: bool(parent.buffered))
     gw.status("cid1")
     assert parent.buffered == []
     assert parent.received_wrong_cid_queue == []
-    assert parent.timeouts == [gateway._SOCKET_TIMEOUT]  # the timeout is never changed
+    # Short while reading what is buffered, then back to normal for the request.
+    assert sock.timeouts == [gateway._DRAIN_TIMEOUT, gateway._SOCKET_TIMEOUT]
 
 
 def test_an_empty_buffer_is_not_read(monkeypatch):
     gw, script = make([{"dps": {"24": 189}}])
     parent = gw._gateway()
-    parent.socket = object()
+    parent.socket = sock = FakeSocket()
     parent.buffered = [{"dps": {"24": 193}}]
     monkeypatch.setattr(gateway, "_readable", lambda sock: False)
     gw.status("cid1")
     assert parent.buffered  # receive() was never called
+    assert sock.timeouts == []  # and the timeout never touched
+
+
+def test_parked_updates_are_dropped_even_with_an_empty_buffer(monkeypatch):
+    # tinytuya's receive() hands out a parked update instead of reading the socket.
+    gw, script = make([{"dps": {"24": 189}}])
+    parent = gw._gateway()
+    parent.socket = FakeSocket()
+    parent.received_wrong_cid_queue.append(("child", {"dps": {"24": 193}}))
+    monkeypatch.setattr(gateway, "_readable", lambda sock: False)
+    gw.status("cid1")
+    assert parent.received_wrong_cid_queue == []
+
+
+@pytest.mark.parametrize("data", [b"", ConnectionResetError()])
+def test_a_connection_closed_by_the_gateway_is_dropped_before_reading(monkeypatch, data):
+    gw, script = make([{"dps": {"24": 189}}])
+    parent = gw._gateway()
+    parent.socket = FakeSocket(data)
+    parent.buffered = [{"dps": {"24": 193}}]
+    monkeypatch.setattr(gateway, "_readable", lambda sock: True)
+    assert gw.status("cid1") == {"24": 189}
+    assert parent.closed
+    assert parent.buffered  # receive() was never called on the dead connection
+    assert script.calls == [("status", "cid1")]  # asked once, on a new connection
+    assert gw._gateway() is not parent
+
+
+def test_readable_works_on_a_real_socket():
+    import socket
+
+    a, b = socket.socketpair()
+    try:
+        assert gateway._waiting(a) is False
+        b.sendall(b"x")
+        assert gateway._waiting(a) is True
+        assert a.recv(1) == b"x"  # the peek consumed nothing
+        b.close()
+        assert gateway._waiting(a) is None
+    finally:
+        a.close()
+        b.close()
 
 
 def test_nothing_is_drained_before_the_first_connection():
@@ -246,3 +305,23 @@ def test_a_push_in_place_of_the_subdevice_list_is_retried():
     gw, script = make([push, {"data": {"online": ["a"], "offline": []}}])
     assert gw.list_subdevices() == {"a": True}
     assert len(script.calls) == 2
+
+
+def test_the_subdevice_list_is_read_past_a_push_without_reconnecting():
+    push = {"dps": {"24": 189}, "cid": "cid1"}
+    gw, script = make([push])
+    parent = gw._gateway()
+    parent.buffered = [push, {"data": {"online": ["a"], "offline": ["b"]}}]
+    assert gw.list_subdevices() == {"a": True, "b": False}
+    assert script.calls == [("subdev_query",)]
+    assert not parent.closed
+
+
+def test_nothing_but_pushes_after_a_subdevice_query_is_retried():
+    push = {"dps": {"24": 189}, "cid": "cid1"}
+    gw, script = make([push, {"data": {"online": ["a"], "offline": []}}])
+    parent = gw._gateway()
+    parent.buffered = [push] * gateway._PUSHES_BEFORE_REPLY
+    assert gw.list_subdevices() == {"a": True}
+    assert len(script.calls) == 2
+    assert parent.closed

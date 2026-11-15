@@ -40,11 +40,13 @@ POLL_AUTH_FAILURES_BEFORE_REAUTH = 20
 # valve that checks in again is picked up within a minute.
 RESCAN_EVERY_POLLS = 20
 RESCAN_EVERY_POLLS_WHILE_OFFLINE = 2
-# When the first sub-devices asked in a poll all fail, the gateway itself is
-# not answering: stop instead of timing out on each remaining device.
+# When this many sub-devices in a row fail in one poll, the gateway itself has
+# stopped answering: stop instead of timing out on each remaining device.
+# Devices already in backoff are expected to fail and do not count.
 GATEWAY_SILENT_AFTER_FAILURES = 2
 # A sub-device that failed this many polls in a row is only asked again every
 # RETRY_FAILING_EVERY_POLLS polls, so a dead valve does not slow down the rest.
+# The retries are spread out, so two dead valves are not retried on the same poll.
 DEVICE_FAILURES_BEFORE_BACKOFF = 3
 RETRY_FAILING_EVERY_POLLS = 10
 # A written value is shown until the device confirms it, or for this long. Until
@@ -126,14 +128,18 @@ class DanfossLocalCoordinator(DataUpdateCoordinator[dict[str, SubDevice]]):
 
     async def _async_update_data(self) -> dict[str, SubDevice]:
         self._polls += 1
-        any_offline = any(not dev.gateway_online for dev in self.devices.values())
+        # A device the gateway no longer lists keeps its last flag forever, so
+        # only listed devices decide how often to rescan.
+        any_offline = any(
+            not dev.gateway_online for dev in self.devices.values() if dev.cid in self.listed
+        )
         rescan_every = RESCAN_EVERY_POLLS_WHILE_OFFLINE if any_offline else RESCAN_EVERY_POLLS
         if self._polls % rescan_every == 0:
             await self._async_rescan()
 
         # Start with a different device each poll, so a session that drops
         # part-way through does not always starve the same devices.
-        order = list(self.devices.values())
+        order = list(enumerate(self.devices.values()))
         if order:
             start = self._polls % len(order)
             order = order[start:] + order[:start]
@@ -141,8 +147,9 @@ class DanfossLocalCoordinator(DataUpdateCoordinator[dict[str, SubDevice]]):
         errors: list[str] = []
         failed: list[SubDevice] = []
         succeeded = 0
+        streak = 0  # failures in a row, of devices not in backoff
         auth_error: GatewayAuthError | None = None
-        for dev in order:
+        for index, dev in order:
             if self.gateway.closed:
                 break
             if not dev.gateway_online or dev.cid not in self.listed:
@@ -150,29 +157,33 @@ class DanfossLocalCoordinator(DataUpdateCoordinator[dict[str, SubDevice]]):
                 # status would only time out and drop the shared connection.
                 dev.online = False
                 continue
-            if (
-                dev.failures >= DEVICE_FAILURES_BEFORE_BACKOFF
-                and self._polls % RETRY_FAILING_EVERY_POLLS
-            ):
+            backed_off = dev.failures >= DEVICE_FAILURES_BEFORE_BACKOFF
+            if backed_off and (self._polls + index) % RETRY_FAILING_EVERY_POLLS:
                 continue  # keeps failing: stays unavailable, retried now and then
             try:
                 dps = await self.hass.async_add_executor_job(self.gateway.status, dev.cid)
-            except GatewayAuthError as err:
-                # The session is gone; the remaining devices would fail the same way.
-                auth_error = err
-                break
             except GatewayConnectionError as err:
                 # The gateway itself is unreachable (after a retry): every
                 # device is unavailable.
                 raise UpdateFailed(str(err)) from err
             except GatewayError as err:
                 dev.online = False
+                if backed_off:
+                    # Still dead, as expected. This says nothing about the
+                    # gateway or the key, whatever the error was.
+                    continue
                 failed.append(dev)
+                streak += 1
+                if isinstance(err, GatewayAuthError):
+                    # The session is gone; the remaining devices would fail the same way.
+                    auth_error = err
+                    break
                 errors.append(str(err))
-                if succeeded == 0 and len(failed) >= GATEWAY_SILENT_AFTER_FAILURES:
-                    break  # the gateway is not answering at all
+                if streak >= GATEWAY_SILENT_AFTER_FAILURES:
+                    break  # the gateway stopped answering
                 continue
             succeeded += 1
+            streak = 0
             dev.failures = 0
             dev.online = True
             dev.merge(dps, time.monotonic())
@@ -192,13 +203,14 @@ class DanfossLocalCoordinator(DataUpdateCoordinator[dict[str, SubDevice]]):
             for dev in failed:
                 dev.failures += 1
 
-        if auth_error is None:
+        if auth_error is None or succeeded:
+            # No auth error, or the key worked earlier in this very poll and the
+            # session merely dropped: either way the count "in a row" restarts.
+            # The devices not reached keep their last values and are read first
+            # on a later poll (the order rotates).
             self._auth_failures = 0
-        elif succeeded:
-            # The key worked earlier in this very poll: the session merely
-            # dropped. The devices not reached keep their last values and are
-            # read first on a later poll (the order rotates).
-            _LOGGER.debug("Poll cut short by the gateway (%s)", auth_error)
+            if auth_error is not None:
+                _LOGGER.debug("Poll cut short by the gateway (%s)", auth_error)
         else:
             self._auth_failures += 1
             if self._auth_failures >= POLL_AUTH_FAILURES_BEFORE_REAUTH:
@@ -229,6 +241,10 @@ class DanfossLocalCoordinator(DataUpdateCoordinator[dict[str, SubDevice]]):
         """Refresh the sub-device list: online flags, new and unpaired devices."""
         try:
             found = await self._async_list_subdevices()
+        except GatewayConnectionError as err:
+            # Unreachable: fail the poll now instead of timing out again on
+            # the first status.
+            raise UpdateFailed(str(err)) from err
         except GatewayError as err:
             _LOGGER.debug("Sub-device rescan failed: %s", err)
             return

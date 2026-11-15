@@ -101,7 +101,9 @@ class DanfossAllyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
         """Return the options flow."""
         return DanfossAllyLocalOptionsFlow()
 
-    async def _async_test(self, data: dict[str, Any]) -> str | None:
+    async def _async_test(
+        self, data: dict[str, Any], *, require_subdevices: bool = True
+    ) -> str | None:
         """Connect with ``data``; return an error key, or None if it works."""
         host = data[CONF_HOST]
         # tinytuya treats these as "discover the device by UDP broadcast".
@@ -121,7 +123,7 @@ class DanfossAllyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             return "cannot_connect"
         finally:
             await self.hass.async_add_executor_job(gateway.close)
-        return None if found else "no_subdevices"
+        return None if found or not require_subdevices else "no_subdevices"
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for gateway address and local key, then test the connection."""
@@ -154,7 +156,9 @@ class DanfossAllyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             data = {**entry.data, **user_input, CONF_LOCAL_KEY: user_input[CONF_LOCAL_KEY].strip()}
-            error = await self._async_test(data)
+            # A gateway that was just reset has no valves paired yet; the key is
+            # still right, and setup retries until the list is no longer empty.
+            error = await self._async_test(data, require_subdevices=False)
             if error is None:
                 return self.async_update_reload_and_abort(entry, data=data)
             errors["base"] = error
