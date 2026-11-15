@@ -101,39 +101,45 @@ class DanfossAllyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
         """Return the options flow."""
         return DanfossAllyLocalOptionsFlow()
 
+    async def _async_test(self, data: dict[str, Any]) -> str | None:
+        """Connect with ``data``; return an error key, or None if it works."""
+        host = data[CONF_HOST]
+        # tinytuya treats these as "discover the device by UDP broadcast".
+        if not host or host.lower() == "auto" or host == "0.0.0.0":
+            return "cannot_connect"
+        if not data[CONF_LOCAL_KEY].isascii():
+            return "invalid_auth"
+        gateway = DanfossGateway(
+            host, data[CONF_DEVICE_ID], data[CONF_LOCAL_KEY], data[CONF_PROTOCOL_VERSION]
+        )
+        try:
+            found = await self.hass.async_add_executor_job(gateway.list_subdevices)
+        except GatewayAuthError:
+            return "invalid_auth"
+        except GatewayError as err:
+            _LOGGER.debug("Connection test failed: %s", err)
+            return "cannot_connect"
+        finally:
+            await self.hass.async_add_executor_job(gateway.close)
+        return None if found else "no_subdevices"
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for gateway address and local key, then test the connection."""
         errors: dict[str, str] = {}
-        placeholders: dict[str, str] = {}
         if user_input is not None:
+            user_input = {
+                key: value.strip() if isinstance(value, str) else value
+                for key, value in user_input.items()
+            }
             await self.async_set_unique_id(user_input[CONF_DEVICE_ID])
             self._abort_if_unique_id_configured()
-            gateway = DanfossGateway(
-                user_input[CONF_HOST],
-                user_input[CONF_DEVICE_ID],
-                user_input[CONF_LOCAL_KEY],
-                user_input[CONF_PROTOCOL_VERSION],
-            )
-            try:
-                found = await self.hass.async_add_executor_job(gateway.list_subdevices)
-            except GatewayAuthError:
-                errors["base"] = "invalid_auth"
-            except GatewayError as err:
-                _LOGGER.debug("Connection test failed: %s", err)
-                errors["base"] = "cannot_connect"
-            else:
-                if not found:
-                    errors["base"] = "no_subdevices"
-                else:
-                    return self.async_create_entry(title="Danfoss Ally Gateway", data=user_input)
-            finally:
-                await self.hass.async_add_executor_job(gateway.close)
+            error = await self._async_test(user_input)
+            if error is None:
+                return self.async_create_entry(title="Danfoss Ally Gateway", data=user_input)
+            errors["base"] = error
 
         return self.async_show_form(
-            step_id="user",
-            data_schema=_schema(user_input or {}),
-            errors=errors,
-            description_placeholders=placeholders,
+            step_id="user", data_schema=_schema(user_input or {}), errors=errors
         )
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
@@ -147,20 +153,11 @@ class DanfossAllyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reauth_entry()
         errors: dict[str, str] = {}
         if user_input is not None:
-            data = {**entry.data, **user_input}
-            gateway = DanfossGateway(
-                data[CONF_HOST], data[CONF_DEVICE_ID], data[CONF_LOCAL_KEY], data[CONF_PROTOCOL_VERSION]
-            )
-            try:
-                await self.hass.async_add_executor_job(gateway.list_subdevices)
-            except GatewayAuthError:
-                errors["base"] = "invalid_auth"
-            except GatewayError:
-                errors["base"] = "cannot_connect"
-            else:
+            data = {**entry.data, **user_input, CONF_LOCAL_KEY: user_input[CONF_LOCAL_KEY].strip()}
+            error = await self._async_test(data)
+            if error is None:
                 return self.async_update_reload_and_abort(entry, data=data)
-            finally:
-                await self.hass.async_add_executor_job(gateway.close)
+            errors["base"] = error
 
         return self.async_show_form(
             step_id="reauth_confirm",

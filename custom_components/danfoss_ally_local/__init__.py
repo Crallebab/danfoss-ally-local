@@ -6,7 +6,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from .const import CONF_NAMES, DOMAIN, default_name
+from .const import CONF_DEVICE_ID, CONF_NAMES, DOMAIN, default_name
 from .coordinator import DanfossLocalConfigEntry, DanfossLocalCoordinator
 
 PLATFORMS = [
@@ -54,7 +54,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DanfossLocalConfigEntry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     # From here on a device that turns out to be a different type, or a newly
     # paired device, reloads the entry so its entities get created.
-    coordinator.reload_on_change = True
+    coordinator.async_entities_created()
     return True
 
 
@@ -70,6 +70,12 @@ async def async_remove_config_entry_device(
     hass: HomeAssistant, entry: DanfossLocalConfigEntry, device: dr.DeviceEntry
 ) -> bool:
     """Allow deleting a sub-device the gateway no longer lists (unpaired)."""
-    coordinator = entry.runtime_data
     ids = {identifier[1] for identifier in device.identifiers if identifier[0] == DOMAIN}
-    return coordinator.gateway_id not in ids and not ids & coordinator.listed
+    if entry.data[CONF_DEVICE_ID] in ids:
+        return False  # the gateway itself goes with the config entry
+    coordinator = getattr(entry, "runtime_data", None)
+    if coordinator is None:
+        # Not loaded (e.g. gateway offline): the device is recreated on the next
+        # successful setup if it is still paired.
+        return True
+    return not ids & coordinator.listed

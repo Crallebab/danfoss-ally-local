@@ -21,7 +21,7 @@ from .const import (
     UPDATE_INTERVAL,
 )
 from .device import SubDevice
-from .gateway import DanfossGateway, GatewayAuthError, GatewayError
+from .gateway import DanfossGateway, GatewayAuthError, GatewayConnectionError, GatewayError
 from .profiles import PROFILES_BY_KEY, RADIATOR_THERMOSTAT, UNKNOWN, detect_profile
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,11 +37,13 @@ SETUP_AUTH_FAILURES_BEFORE_REAUTH = 5
 POLL_AUTH_FAILURES_BEFORE_REAUTH = 20
 # Ask the gateway for its sub-device list again every this many polls.
 RESCAN_EVERY_POLLS = 20
-# Two sub-devices failing in a row means the gateway itself is unreachable.
-MAX_CONSECUTIVE_DEVICE_FAILURES = 2
+# A sub-device that failed this many polls in a row is only asked again every
+# RETRY_FAILING_EVERY_POLLS polls, so a dead valve does not slow down the rest.
+DEVICE_FAILURES_BEFORE_BACKOFF = 3
+RETRY_FAILING_EVERY_POLLS = 10
 # A written value is shown until the device confirms it, or for this long. Until
 # then the gateway may still serve the value it cached before the write.
-WRITE_HOLD_SECONDS = 180.0
+WRITE_HOLD_SECONDS = 60.0
 
 # Auth failures during setup, per config entry; survives the coordinator being
 # recreated for each setup retry.
@@ -122,7 +124,7 @@ class DanfossLocalCoordinator(DataUpdateCoordinator[dict[str, SubDevice]]):
 
         errors: list[str] = []
         polled = 0
-        consecutive_failures = 0
+        auth_error: GatewayAuthError | None = None
         for dev in list(self.devices.values()):
             if self.gateway.closed:
                 break
@@ -131,27 +133,27 @@ class DanfossLocalCoordinator(DataUpdateCoordinator[dict[str, SubDevice]]):
                 # status would only time out and drop the shared connection.
                 dev.online = False
                 continue
+            if (
+                dev.failures >= DEVICE_FAILURES_BEFORE_BACKOFF
+                and self._polls % RETRY_FAILING_EVERY_POLLS
+            ):
+                continue  # keeps failing: stays unavailable, retried now and then
             polled += 1
             try:
                 dps = await self.hass.async_add_executor_job(self.gateway.status, dev.cid)
             except GatewayAuthError as err:
-                self._auth_failures += 1
-                if self._auth_failures >= POLL_AUTH_FAILURES_BEFORE_REAUTH:
-                    raise ConfigEntryAuthFailed(str(err)) from err
-                if self._auth_failures > 1:
-                    raise UpdateFailed(str(err)) from err
-                # First occurrence: the session is gone, so skip the rest of this
-                # poll and keep the last values instead of flagging every device.
+                # The session is gone; the remaining devices would fail the same way.
+                auth_error = err
                 break
+            except GatewayConnectionError as err:
+                # The gateway itself is unreachable: every device is unavailable.
+                raise UpdateFailed(str(err)) from err
             except GatewayError as err:
                 dev.online = False
+                dev.failures += 1
                 errors.append(str(err))
-                consecutive_failures += 1
-                if consecutive_failures >= MAX_CONSECUTIVE_DEVICE_FAILURES:
-                    break  # the gateway is unreachable; don't time out on each device
                 continue
-            consecutive_failures = 0
-            self._auth_failures = 0
+            dev.failures = 0
             dev.online = True
             dev.merge(dps, time.monotonic())
             detected = detect_profile(dev.dps)
@@ -163,6 +165,20 @@ class DanfossLocalCoordinator(DataUpdateCoordinator[dict[str, SubDevice]]):
                 dev.profile = detected
                 self._needs_reload = True
 
+        if auth_error is not None:
+            # Counted per poll and only cleared by a poll without the error, so
+            # a session that keeps dropping mid-poll is not hidden by the devices
+            # polled before it dropped.
+            self._auth_failures += 1
+            if self._auth_failures >= POLL_AUTH_FAILURES_BEFORE_REAUTH:
+                raise ConfigEntryAuthFailed(str(auth_error)) from auth_error
+            if self._auth_failures > 1:
+                raise UpdateFailed(str(auth_error)) from auth_error
+            # A single occurrence keeps the last values for one poll.
+            _LOGGER.debug("Poll cut short by the gateway (%s)", auth_error)
+        else:
+            self._auth_failures = 0
+
         if errors and len(errors) == polled:
             raise UpdateFailed("; ".join(errors))
         if self._needs_reload and self.reload_on_change:
@@ -170,6 +186,15 @@ class DanfossLocalCoordinator(DataUpdateCoordinator[dict[str, SubDevice]]):
             self.async_persist_profiles()
             self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
         return self.devices
+
+    def async_entities_created(self) -> None:
+        """Called by async_setup_entry once the platforms are set up.
+
+        Device types found during the first refresh already have their
+        entities, so only changes from now on reload the entry.
+        """
+        self._needs_reload = False
+        self.reload_on_change = True
 
     async def _async_rescan(self) -> None:
         """Refresh the sub-device list: online flags, new and unpaired devices."""

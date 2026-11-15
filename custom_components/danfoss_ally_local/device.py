@@ -19,6 +19,8 @@ class SubDevice:
     profile: Profile = UNKNOWN
     # What the gateway's sub-device list says.
     gateway_online: bool = True
+    # Polls that failed in a row.
+    failures: int = 0
     # DPs written recently: {dp: (value, monotonic deadline)}.
     pending: dict[str, tuple[Any, float]] = field(default_factory=dict)
 

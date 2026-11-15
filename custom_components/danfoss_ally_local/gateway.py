@@ -25,7 +25,14 @@ _LOGGER = logging.getLogger(__name__)
 # callers must not treat a single occurrence as proof of a wrong key.
 # 904 ("Unexpected Payload") is a plain transient error.
 _AUTH_ERRORS = {"914"}
+# The TCP connection itself failed (host down or unreachable). tinytuya already
+# retried the connect, so these are not retried again.
+_CONNECTION_ERRORS = {"901", "905"}
 _RETRY_DELAY = 2.0
+_SOCKET_TIMEOUT = 5.0
+# Reading buffered messages before a request: short timeout, bounded count.
+_DRAIN_TIMEOUT = 0.2
+_DRAIN_MAX_MESSAGES = 25
 
 
 class GatewayError(Exception):
@@ -34,6 +41,10 @@ class GatewayError(Exception):
 
 class GatewayAuthError(GatewayError):
     """The gateway rejected the session twice in a row: probably a wrong key."""
+
+
+class GatewayConnectionError(GatewayError):
+    """The gateway cannot be reached on the network."""
 
 
 def _check(result: Any, what: str, none_ok: bool = False) -> dict[str, Any]:
@@ -48,6 +59,8 @@ def _check(result: Any, what: str, none_ok: bool = False) -> dict[str, Any]:
         msg = f"{what}: {result.get('Error', 'error')} ({err})"
         if err in _AUTH_ERRORS:
             raise GatewayAuthError(msg)
+        if err in _CONNECTION_ERRORS:
+            raise GatewayConnectionError(msg)
         raise GatewayError(msg)
     return result
 
@@ -92,7 +105,7 @@ class DanfossGateway:
                 connection_retry_limit=2,
                 connection_retry_delay=2,
             )
-            gw.set_socketTimeout(5)
+            gw.set_socketTimeout(_SOCKET_TIMEOUT)
             self._gw = gw
             self._children = {}
         return self._gw
@@ -115,19 +128,58 @@ class DanfossGateway:
         self._gw = None
         self._children = {}
 
+    def _drain(self) -> None:
+        """Read everything already buffered on the socket.
+
+        The gateway pushes DP changes unasked. tinytuya takes the first message
+        it reads as the reply to a request, so an unread push would be mistaken
+        for the reply and the real reply left behind for the next request. Each
+        message read here is merged into the cached status of its child.
+        """
+        gw = self._gateway()
+        if getattr(gw, "socket", None) is None:
+            return  # not connected yet: nothing can be buffered
+        gw.set_socketTimeout(_DRAIN_TIMEOUT)
+        try:
+            for _ in range(_DRAIN_MAX_MESSAGES):
+                message = gw.receive()
+                if not isinstance(message, dict) or "Err" in message:
+                    break
+        finally:
+            gw.set_socketTimeout(_SOCKET_TIMEOUT)
+        # Updates parked for other children are in their caches by now; a stale
+        # entry must not be replayed as a reply.
+        queue = getattr(gw, "received_wrong_cid_queue", None)
+        if queue:
+            queue.clear()
+
     def _call(self, what: str, func: Callable[[], Any], none_ok: bool = False) -> dict[str, Any]:
-        """Run one request; on any failure reconnect and retry once.
+        """Run one request; on a failure reconnect and retry once.
 
         The gateway sometimes ignores the first request on a fresh socket shortly
         after another connection closed, which surfaces as "no response", 904 or
-        914. Only a failure on both attempts is reported to the caller.
+        914. Only a failure on both attempts is reported to the caller. An
+        unreachable gateway is reported at once: tinytuya already retried.
         """
         with self._lock:
             for attempt in (1, 2):
                 if self._closed:
                     raise GatewayError(f"{what}: connection is closed")
                 try:
-                    return _check(func(), what, none_ok)
+                    try:
+                        self._drain()
+                        result = func()
+                    except GatewayError:
+                        raise
+                    except Exception as err:
+                        # tinytuya raises for malformed input (e.g. a key that is
+                        # not latin-1). Only the type is reported: the message
+                        # can contain the key.
+                        raise GatewayError(f"{what}: {type(err).__name__}") from None
+                    return _check(result, what, none_ok)
+                except GatewayConnectionError:
+                    self._reset()
+                    raise
                 except GatewayError as err:
                     self._reset()
                     if attempt == 2:
@@ -138,11 +190,19 @@ class DanfossGateway:
 
     def list_subdevices(self) -> dict[str, bool]:
         """Return ``{cid: online}`` for every sub-device paired to the gateway."""
-        result = self._call("subdev_query", lambda: self._gateway().subdev_query())
+
+        def query() -> Any:
+            result = self._gateway().subdev_query()
+            if isinstance(result, dict) and "Err" not in result:
+                data = result.get("data", result)
+                # A DP push can still slip in ahead of the reply; it has neither
+                # list. Raising here makes _call reconnect and ask again.
+                if not isinstance(data, dict) or not ("online" in data or "offline" in data):
+                    raise GatewayError("subdev_query: reply carries no sub-device list")
+            return result
+
+        result = self._call("subdev_query", query)
         data = result.get("data", result)
-        # An unsolicited DP push can arrive in place of the reply; it has neither list.
-        if not isinstance(data, dict) or not ("online" in data or "offline" in data):
-            raise GatewayError("subdev_query: reply carries no sub-device list")
         found: dict[str, bool] = {}
         for cid in data.get("online", []) or []:
             found[str(cid)] = True
@@ -155,18 +215,12 @@ class DanfossGateway:
 
         def query() -> Any:
             child = self._child(cid)
-            # While waiting for one child, tinytuya parks updates from other
-            # children in this queue and may later replay an old entry as if it
-            # were the fresh reply. Everything parked there is already merged
-            # into each child's cached status, so the queue can be dropped.
-            queue = getattr(self._gateway(), "received_wrong_cid_queue", None)
-            if queue:
-                queue.clear()
             result = child.status()
             if isinstance(result, dict) and "Err" not in result:
-                # The cached status holds every message from this child in
-                # arrival order, including pushes seen during other requests.
-                cached = child.cached_status(nowait=True)
+                # The historic status of the child holds every message from it
+                # in arrival order, including pushes read while draining or
+                # while another child was being queried.
+                cached = child.cached_status(historic=True)
                 if isinstance(cached, dict) and isinstance(cached.get("dps"), dict):
                     return {**result, "dps": dict(cached["dps"])}
             return result
@@ -191,6 +245,7 @@ class DanfossGateway:
 
     def close(self) -> None:
         """Close the socket for good; later calls fail instead of reconnecting."""
+        # Set before taking the lock so a request in flight does not retry.
+        self._closed = True
         with self._lock:
-            self._closed = True
             self._reset()

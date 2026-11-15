@@ -22,13 +22,20 @@ class FakeDevice:
         self.parent = parent
         self.closed = False
         self.received_wrong_cid_queue = []
-        self.cache = None
+        self.historic = {}
+        self.socket = None
+        self.buffered = []
+        self.timeouts = []
 
-    def cached_status(self, nowait=False):
-        return self.cache
+    def cached_status(self, historic=False, nowait=False):
+        # Like tinytuya: the live cache is unavailable for a sub-device.
+        return self.historic if historic else None
+
+    def receive(self):
+        return self.buffered.pop(0) if self.buffered else None
 
     def set_socketTimeout(self, seconds):  # noqa: N802 - tinytuya's name
-        pass
+        self.timeouts.append(seconds)
 
     def close(self):
         self.closed = True
@@ -156,25 +163,58 @@ def test_none_reply_to_a_status_is_retried():
     assert len(script.calls) == 2
 
 
-def test_status_prefers_the_in_order_cache_over_a_replayed_reply():
-    # The reply handed back is an old queued update; the child's cache has the
-    # messages in arrival order and is the truth.
+def test_status_returns_the_in_order_record_of_the_child():
+    # The reply handed back can be an old message; the historic status of the
+    # child has every message in arrival order and is the truth.
     gw, script = make([{"dps": {"24": 193}}])
     child = gw._child("cid1")
-    child.cache = {"dps": {"24": 189, "170": 20}}
+    child.historic = {"dps": {"24": 189, "170": 20}}
     assert gw.status("cid1") == {"24": 189, "170": 20}
 
 
-def test_status_clears_the_parked_update_queue():
+def test_buffered_pushes_are_read_before_a_request():
     gw, script = make([{"dps": {"24": 189}}])
     parent = gw._gateway()
+    parent.socket = object()  # connected
+    parent.buffered = [{"dps": {"24": 193}, "cid": "cid2"}, {"dps": {"1": 5}, "cid": "cid3"}]
     parent.received_wrong_cid_queue.append(("child", {"dps": {"24": 193}}))
     gw.status("cid1")
+    assert parent.buffered == []
     assert parent.received_wrong_cid_queue == []
+    assert parent.timeouts[-1] == gateway._SOCKET_TIMEOUT  # normal timeout restored
 
 
-def test_a_push_in_place_of_the_subdevice_list_is_an_error():
-    push = {"dps": {"24": 189}, "cid": "cid1"}
-    gw, _ = make([push, push])
-    with pytest.raises(gateway.GatewayError, match="no sub-device list"):
+def test_nothing_is_drained_before_the_first_connection():
+    gw, script = make([{"dps": {"24": 189}}])
+    parent = gw._gateway()
+    parent.buffered = [{"dps": {"24": 193}}]
+    gw.status("cid1")
+    assert parent.buffered  # untouched: no socket yet
+
+
+def test_unreachable_gateway_is_not_retried():
+    down = {"Error": "Network Error: Unable to Connect", "Err": "901", "Payload": None}
+    gw, script = make([down, {"dps": {"16": 205}}])
+    with pytest.raises(gateway.GatewayConnectionError):
+        gw.status("cid1")
+    assert len(script.calls) == 1
+
+
+def test_an_exception_from_tinytuya_becomes_a_gateway_error_without_its_message():
+    def factory(*args, **kwargs):
+        raise UnicodeEncodeError("latin-1", "secret-key", 0, 1, "bad")
+
+    gw = gateway.DanfossGateway(
+        "192.0.2.1", "gwid", "k", "3.5", device_factory=factory, retry_delay=0
+    )
+    with pytest.raises(gateway.GatewayError) as err:
         gw.list_subdevices()
+    assert "secret-key" not in str(err.value)
+    assert "UnicodeEncodeError" in str(err.value)
+
+
+def test_a_push_in_place_of_the_subdevice_list_is_retried():
+    push = {"dps": {"24": 189}, "cid": "cid1"}
+    gw, script = make([push, {"data": {"online": ["a"], "offline": []}}])
+    assert gw.list_subdevices() == {"a": True}
+    assert len(script.calls) == 2
