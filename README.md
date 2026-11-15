@@ -8,6 +8,22 @@ The gateway is Tuya white-label hardware: it speaks the Tuya LAN protocol
 Zigbee node id. Background:
 [Virki-Workspace/danfoss-ally-is-tuya](https://github.com/Virki-Workspace/danfoss-ally-is-tuya).
 
+> ## ⚠️ Read this before you install
+>
+> **This integration needs your gateway's Tuya local key, and that key is hard
+> to get.** The Danfoss Ally app does not show it, and the usual way of getting
+> a Tuya key (a Tuya developer account) does not apply: the Danfoss Ally app
+> never creates a Tuya account to link. Expect real technical work before
+> anything connects; see [Getting the local key](#getting-the-local-key).
+>
+> - Without the key the integration cannot connect at all.
+> - The key changes whenever the gateway is reset or paired again, and you then
+>   have to get it once more.
+> - Nobody else can look it up for you, and you should never post it anywhere.
+>
+> If that is more than you want to take on, the cloud-based Danfoss Ally
+> integration is the easier choice.
+
 > Not affiliated with or endorsed by Danfoss or Tuya. Danfoss, Danfoss Ally and
 > Tuya are trademarks of their respective owners and are used here only to
 > identify the hardware this integration works with.
@@ -51,12 +67,12 @@ integration never writes to a device type it does not recognise.
 ### Getting the local key
 
 Only the gateway has a local key, and each owner has to obtain it for their own
-gateway. Two routes:
+gateway. The one known route is **from your own signed-in Danfoss Ally app
+session**, described in the background link above.
 
-- **Tuya IoT Platform**: create a cloud project and link your app account. This
-  often does not work for vendor-branded apps such as Danfoss Ally.
-- **From your own signed-in app session**: described in the background link
-  above.
+The usual Tuya route (a cloud project on the Tuya IoT Platform with your app
+account linked to it) is not available: the Danfoss Ally app uses a Danfoss
+account, and no Tuya account exists to link.
 
 Treat the key like a password and never post it in an issue.
 
