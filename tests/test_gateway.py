@@ -172,16 +172,27 @@ def test_status_returns_the_in_order_record_of_the_child():
     assert gw.status("cid1") == {"24": 189, "170": 20}
 
 
-def test_buffered_pushes_are_read_before_a_request():
+def test_buffered_pushes_are_read_before_a_request(monkeypatch):
     gw, script = make([{"dps": {"24": 189}}])
     parent = gw._gateway()
     parent.socket = object()  # connected
     parent.buffered = [{"dps": {"24": 193}, "cid": "cid2"}, {"dps": {"1": 5}, "cid": "cid3"}]
     parent.received_wrong_cid_queue.append(("child", {"dps": {"24": 193}}))
+    monkeypatch.setattr(gateway, "_readable", lambda sock: bool(parent.buffered))
     gw.status("cid1")
     assert parent.buffered == []
     assert parent.received_wrong_cid_queue == []
-    assert parent.timeouts[-1] == gateway._SOCKET_TIMEOUT  # normal timeout restored
+    assert parent.timeouts == [gateway._SOCKET_TIMEOUT]  # the timeout is never changed
+
+
+def test_an_empty_buffer_is_not_read(monkeypatch):
+    gw, script = make([{"dps": {"24": 189}}])
+    parent = gw._gateway()
+    parent.socket = object()
+    parent.buffered = [{"dps": {"24": 193}}]
+    monkeypatch.setattr(gateway, "_readable", lambda sock: False)
+    gw.status("cid1")
+    assert parent.buffered  # receive() was never called
 
 
 def test_nothing_is_drained_before_the_first_connection():
@@ -192,12 +203,29 @@ def test_nothing_is_drained_before_the_first_connection():
     assert parent.buffered  # untouched: no socket yet
 
 
-def test_unreachable_gateway_is_not_retried():
+def test_readable_is_false_for_something_that_is_not_a_socket():
+    assert gateway._readable(object()) is False
+
+
+def test_unreachable_gateway_is_retried_once():
     down = {"Error": "Network Error: Unable to Connect", "Err": "901", "Payload": None}
     gw, script = make([down, {"dps": {"16": 205}}])
+    assert gw.status("cid1") == {"16": 205}
+    gw, script = make([down, down])
     with pytest.raises(gateway.GatewayConnectionError):
         gw.status("cid1")
-    assert len(script.calls) == 1
+    assert len(script.calls) == 2
+
+
+def test_other_exceptions_propagate_with_their_type():
+    def factory(*args, **kwargs):
+        raise TypeError("a bug, not a gateway problem")
+
+    gw = gateway.DanfossGateway(
+        "192.0.2.1", "gwid", "k", "3.5", device_factory=factory, retry_delay=0
+    )
+    with pytest.raises(TypeError):
+        gw.list_subdevices()
 
 
 def test_an_exception_from_tinytuya_becomes_a_gateway_error_without_its_message():

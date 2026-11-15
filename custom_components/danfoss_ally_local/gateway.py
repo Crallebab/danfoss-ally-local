@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import logging
+import select
 import threading
 import time
 from typing import Any
@@ -25,14 +26,22 @@ _LOGGER = logging.getLogger(__name__)
 # callers must not treat a single occurrence as proof of a wrong key.
 # 904 ("Unexpected Payload") is a plain transient error.
 _AUTH_ERRORS = {"914"}
-# The TCP connection itself failed (host down or unreachable). tinytuya already
-# retried the connect, so these are not retried again.
+# The TCP connection itself failed (host down, unreachable, or the single
+# connection slot is taken).
 _CONNECTION_ERRORS = {"901", "905"}
 _RETRY_DELAY = 2.0
 _SOCKET_TIMEOUT = 5.0
-# Reading buffered messages before a request: short timeout, bounded count.
-_DRAIN_TIMEOUT = 0.2
+# Upper bound on buffered messages read before one request.
 _DRAIN_MAX_MESSAGES = 25
+
+
+def _readable(sock: Any) -> bool:
+    """Return whether ``sock`` has data waiting, without blocking."""
+    try:
+        ready, _, _ = select.select([sock], [], [], 0)
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(ready)
 
 
 class GatewayError(Exception):
@@ -135,18 +144,22 @@ class DanfossGateway:
         it reads as the reply to a request, so an unread push would be mistaken
         for the reply and the real reply left behind for the next request. Each
         message read here is merged into the cached status of its child.
+
+        Only reads when data is waiting, so an empty buffer costs nothing and
+        tinytuya's timeout and reconnect paths are not entered.
         """
         gw = self._gateway()
-        if getattr(gw, "socket", None) is None:
+        sock = getattr(gw, "socket", None)
+        if sock is None:
             return  # not connected yet: nothing can be buffered
-        gw.set_socketTimeout(_DRAIN_TIMEOUT)
-        try:
-            for _ in range(_DRAIN_MAX_MESSAGES):
-                message = gw.receive()
-                if not isinstance(message, dict) or "Err" in message:
-                    break
-        finally:
-            gw.set_socketTimeout(_SOCKET_TIMEOUT)
+        for _ in range(_DRAIN_MAX_MESSAGES):
+            if not _readable(sock):
+                break
+            message = gw.receive()
+            if not isinstance(message, dict) or "Err" in message:
+                break
+            if getattr(gw, "socket", None) is not sock:
+                break  # tinytuya replaced the connection
         # Updates parked for other children are in their caches by now; a stale
         # entry must not be replayed as a reply.
         queue = getattr(gw, "received_wrong_cid_queue", None)
@@ -158,8 +171,8 @@ class DanfossGateway:
 
         The gateway sometimes ignores the first request on a fresh socket shortly
         after another connection closed, which surfaces as "no response", 904 or
-        914. Only a failure on both attempts is reported to the caller. An
-        unreachable gateway is reported at once: tinytuya already retried.
+        914, and a brief network dropout as 901. Only a failure on both attempts
+        is reported to the caller.
         """
         with self._lock:
             for attempt in (1, 2):
@@ -169,17 +182,13 @@ class DanfossGateway:
                     try:
                         self._drain()
                         result = func()
-                    except GatewayError:
-                        raise
-                    except Exception as err:
-                        # tinytuya raises for malformed input (e.g. a key that is
-                        # not latin-1). Only the type is reported: the message
-                        # can contain the key.
+                    except (UnicodeError, ValueError) as err:
+                        # tinytuya raises these for malformed input, e.g. a key
+                        # that is not latin-1. Only the type is reported: the
+                        # message can contain the key. Other exceptions are
+                        # bugs and propagate with their traceback.
                         raise GatewayError(f"{what}: {type(err).__name__}") from None
                     return _check(result, what, none_ok)
-                except GatewayConnectionError:
-                    self._reset()
-                    raise
                 except GatewayError as err:
                     self._reset()
                     if attempt == 2:
