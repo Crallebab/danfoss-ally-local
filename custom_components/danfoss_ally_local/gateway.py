@@ -288,10 +288,14 @@ class DanfossGateway:
                     return {**result, "dps": dict(cached["dps"])}
             return result
 
-        result = self._call(f"status {cid}", query)
+        # Messages name a sub-device by the end of its id, like the diagnostics.
+        what = f"status {cid[-4:]}"
+        result = self._call(what, query)
         dps = result.get("dps")
         if not isinstance(dps, dict):
-            raise GatewayError(f"status {cid}: no dps in {result!r}")
+            # Only the keys: tinytuya adds the device object to the reply, and
+            # its repr holds the gateway id and the full sub-device id.
+            raise GatewayError(f"{what}: no dps in reply with keys {sorted(map(str, result))}")
         return {str(k): v for k, v in dps.items()}
 
     def set_dps(self, cid: str, values: dict[str, Any]) -> None:
@@ -304,7 +308,7 @@ class DanfossGateway:
         # tinytuya returns None when the gateway acknowledged the command but sent
         # no DP report in time (unchanged value, sleeping valve): that is success.
         # DP values are absolute, so a retry after a real failure is safe.
-        self._call(f"set {cid}", lambda: self._child(cid).set_multiple_values(raw), none_ok=True)
+        self._call(f"set {cid[-4:]}", lambda: self._child(cid).set_multiple_values(raw), none_ok=True)
 
     def close(self) -> None:
         """Close the socket for good; later calls fail instead of reconnecting."""

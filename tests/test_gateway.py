@@ -325,3 +325,28 @@ def test_nothing_but_pushes_after_a_subdevice_query_is_retried():
     assert gw.list_subdevices() == {"a": True}
     assert len(script.calls) == 2
     assert parent.closed
+
+
+def test_error_messages_carry_no_full_ids():
+    cid = "0123456789abcdef"
+
+    class Holder:
+        def __repr__(self):
+            return f"Device(gwid, cid={cid})"
+
+    reply = {"cid": cid, "t": 1, "device": Holder()}
+    gw, _ = make([reply, reply])
+    with pytest.raises(gateway.GatewayError) as err:
+        gw.status(cid)
+    assert cid not in str(err.value) and "gwid" not in str(err.value)
+    assert "cdef" in str(err.value)
+
+    gw, _ = make([None, None])
+    with pytest.raises(gateway.GatewayError) as err:
+        gw.status(cid)
+    assert cid not in str(err.value)
+
+    gw, _ = make([ERR_904, ERR_904])
+    with pytest.raises(gateway.GatewayError) as err:
+        gw.set_dps(cid, {"30": True})
+    assert cid not in str(err.value)
